@@ -48,6 +48,8 @@ import { PreviewControlsToolkit } from "./toolkits/previewControls/tools.ts";
 import * as PreviewControlsHandlers from "./toolkits/previewControls/handlers.ts";
 import { EnvironmentToolkit } from "./toolkits/environment/tools.ts";
 import * as EnvironmentHandlers from "./toolkits/environment/handlers.ts";
+import * as HardwareHandlers from "./toolkits/hardware/handlers.ts";
+import { HardwareToolkit } from "./toolkits/hardware/tools.ts";
 import { ProjectToolkit } from "./toolkits/project/tools.ts";
 import * as ProjectHandlers from "./toolkits/project/handlers.ts";
 import { AttachmentToolkit } from "./toolkits/attachment/tools.ts";
@@ -1131,6 +1133,9 @@ const layerPreviewControlsRegistration = toolkitRegistration(
   PreviewControlsHandlers.layer,
 );
 
+/** Kitty hardware tools (`hw_*`). */
+const layerHardwareToolkit = toolkitRegistration(HardwareToolkit, HardwareHandlers.layer);
+
 const layerEnvironmentToolkit = toolkitRegistration(
   EnvironmentToolkit,
   EnvironmentHandlers.layer,
@@ -1205,6 +1210,7 @@ export const layerTools = Layer.mergeAll(
   layerPullRequestsToolkit,
   layerDeviceToolkit,
   layerHtmlToolkit,
+  layerHardwareToolkit,
 );
 
 export const layer = layerMcpTransport(layerTools);
