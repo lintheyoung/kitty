@@ -14,6 +14,16 @@ import {
   HardwareSetTargetInput,
   HardwareSetTargetResult,
   HardwareToolError,
+  KicadBomInput,
+  KicadBomResult,
+  KicadDrcInput,
+  KicadDrcResult,
+  KicadErcInput,
+  KicadErcResult,
+  KicadFabExportInput,
+  KicadFabExportResult,
+  KicadNetlistInput,
+  KicadNetlistResult,
   OrchestratorMcpFailure,
 } from "@t3tools/contracts";
 import * as Path from "effect/Path";
@@ -21,6 +31,7 @@ import * as Schema from "effect/Schema";
 import { Tool, Toolkit } from "effect/ai";
 
 import * as HardwareService from "../../../hardware/HardwareService.ts";
+import * as KicadService from "../../../hardware/KicadService.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as ProjectService from "../../../project/ProjectService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
@@ -29,6 +40,13 @@ const dependencies = [McpInvocationContext.McpInvocationContext, HardwareService
 // actsAsCaller resolves the caller's thread; workspace paths resolve through its project.
 const callerDependencies = [...dependencies, ThreadManagementService.ThreadManagementService];
 const workspaceDependencies = [...callerDependencies, ProjectService.ProjectService, Path.Path];
+const kicadDependencies = [
+  McpInvocationContext.McpInvocationContext,
+  KicadService.KicadService,
+  ThreadManagementService.ThreadManagementService,
+  ProjectService.ProjectService,
+  Path.Path,
+];
 const HardwareFailure = Schema.Union([HardwareToolError, OrchestratorMcpFailure]);
 
 const HardwareDoctorTool = Tool.make("hw_doctor", {
@@ -124,6 +142,75 @@ const HardwareSdkconfigSetTool = Tool.make("hw_sdkconfig_set", {
   .annotate(Tool.Idempotent, true)
   .annotate(Tool.OpenWorld, false);
 
+const KicadErcTool = Tool.make("kicad_erc", {
+  description:
+    "Run KiCad's electrical rules check on a schematic. Returns counts per check and the violations (errors first, max 100) with the symbol, pin and position involved.",
+  parameters: KicadErcInput,
+  success: KicadErcResult,
+  failure: HardwareFailure,
+  dependencies: kicadDependencies,
+})
+  .annotate(Tool.Title, "Check schematic (ERC)")
+  .annotate(Tool.Readonly, true)
+  .annotate(Tool.Destructive, false)
+  .annotate(Tool.Idempotent, true)
+  .annotate(Tool.OpenWorld, false);
+
+const KicadDrcTool = Tool.make("kicad_drc", {
+  description:
+    "Run KiCad's design rules check on a board, by default also against the schematic. Returns counts per check, violations (errors first, max 100), unconnected items and board/schematic mismatches.",
+  parameters: KicadDrcInput,
+  success: KicadDrcResult,
+  failure: HardwareFailure,
+  dependencies: kicadDependencies,
+})
+  .annotate(Tool.Title, "Check board (DRC)")
+  .annotate(Tool.Readonly, true)
+  .annotate(Tool.Destructive, false)
+  .annotate(Tool.Idempotent, true)
+  .annotate(Tool.OpenWorld, false);
+
+const KicadNetlistTool = Tool.make("kicad_netlist", {
+  description:
+    "Read a schematic's components and connections. Pass component (e.g. U1) to get that part's pin-to-net table: use it to learn which MCU GPIO connects to which sensor, LED or button before writing firmware.",
+  parameters: KicadNetlistInput,
+  success: KicadNetlistResult,
+  failure: HardwareFailure,
+  dependencies: kicadDependencies,
+})
+  .annotate(Tool.Title, "Read schematic netlist")
+  .annotate(Tool.Readonly, true)
+  .annotate(Tool.Destructive, false)
+  .annotate(Tool.Idempotent, true)
+  .annotate(Tool.OpenWorld, false);
+
+const KicadBomTool = Tool.make("kicad_bom", {
+  description:
+    "Bill of materials from a schematic, grouped by value and footprint, with LCSC/MPN fields. Lists parts that have no LCSC or MPN.",
+  parameters: KicadBomInput,
+  success: KicadBomResult,
+  failure: HardwareFailure,
+  dependencies: kicadDependencies,
+})
+  .annotate(Tool.Title, "Read bill of materials")
+  .annotate(Tool.Readonly, true)
+  .annotate(Tool.Destructive, false)
+  .annotate(Tool.Idempotent, true)
+  .annotate(Tool.OpenWorld, false);
+
+const KicadFabExportTool = Tool.make("kicad_fab_export", {
+  description:
+    "Export a board's fabrication files: Gerbers for every copper layer plus mask, paste, silkscreen and outline, Excellon drill, a CSV position file, and a zip of Gerbers + drill ready to upload to a PCB fab. Run kicad_drc first.",
+  parameters: KicadFabExportInput,
+  success: KicadFabExportResult,
+  failure: HardwareFailure,
+  dependencies: kicadDependencies,
+})
+  .annotate(Tool.Title, "Export fabrication files")
+  .annotate(Tool.Destructive, false)
+  .annotate(Tool.Idempotent, true)
+  .annotate(Tool.OpenWorld, false);
+
 export const HardwareToolkit = Toolkit.make(
   HardwareDoctorTool,
   HardwareChipInfoTool,
@@ -132,4 +219,9 @@ export const HardwareToolkit = Toolkit.make(
   HardwareSetTargetTool,
   HardwareSdkconfigGetTool,
   HardwareSdkconfigSetTool,
+  KicadErcTool,
+  KicadDrcTool,
+  KicadNetlistTool,
+  KicadBomTool,
+  KicadFabExportTool,
 );

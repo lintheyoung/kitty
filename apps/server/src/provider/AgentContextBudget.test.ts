@@ -42,6 +42,7 @@ import { SourceControlRepositoryService } from "../sourceControl/SourceControlRe
 import { GitVcsDriver } from "../vcs/GitVcsDriver.ts";
 import { VcsStatusBroadcaster } from "../vcs/VcsStatusBroadcaster.ts";
 import { HardwareService } from "../hardware/HardwareService.ts";
+import { KicadService } from "../hardware/KicadService.ts";
 import { buildCodexAdditionalContext } from "./CodexDeveloperInstructions.ts";
 import { DocumentText } from "./DocumentText.ts";
 import { ProviderRegistry } from "./ProviderRegistry.ts";
@@ -59,6 +60,7 @@ const toolHandlerServices = Layer.mergeAll(
   Layer.mock(OrchestratorV2)({}),
   Layer.mock(PeerForwarding)({}),
   Layer.mock(HardwareService)({}),
+  Layer.mock(KicadService)({}),
   Layer.mock(PeerLinkRequests)({}),
   Layer.mock(PeerLinks)({}),
   Layer.mock(PreviewAutomationBroker)({}),

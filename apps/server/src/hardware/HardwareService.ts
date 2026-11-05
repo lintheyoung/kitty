@@ -31,6 +31,7 @@ import * as Path from "effect/Path";
 import * as ProcessRunner from "../processRunner.ts";
 import { logTail, parseAppBinarySize, parseBuildDiagnostics } from "./buildOutput.ts";
 import { parseEsptoolChipInfo } from "./esptoolOutput.ts";
+import { kicadCliCandidates } from "./KicadService.ts";
 import {
   applySdkconfigUpdates,
   encodeSdkconfigValue,
@@ -95,7 +96,6 @@ export class HardwareService extends Context.Service<
   }
 >()("t3/hardware/HardwareService") {}
 
-const MAC_KICAD_CLI = "/Applications/KiCad/KiCad.app/Contents/MacOS/kicad-cli";
 const pinnedIdf = `${SUPPORTED_IDF.major}.${SUPPORTED_IDF.minor}`;
 
 /** Decodes chunked process output without splitting multi-byte characters. */
@@ -250,9 +250,7 @@ export const make = Effect.fn("HardwareService.make")(function* () {
   });
 
   const checkKicad = Effect.fn("HardwareService.checkKicad")(function* (env: NodeJS.ProcessEnv) {
-    const configured = env.KICAD_CLI?.trim();
-    const candidates = configured ? [configured, MAC_KICAD_CLI] : [MAC_KICAD_CLI, "kicad-cli"];
-    for (const command of candidates) {
+    for (const command of kicadCliCandidates(env)) {
       const result = yield* processRunner
         .run({ command, args: ["version"], timeout: "15 seconds" })
         .pipe(Effect.option);

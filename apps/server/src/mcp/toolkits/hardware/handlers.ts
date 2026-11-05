@@ -2,13 +2,14 @@ import { HardwareToolError } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 
 import * as HardwareService from "../../../hardware/HardwareService.ts";
+import * as KicadService from "../../../hardware/KicadService.ts";
 import { resolveInWorkspace } from "../../../hardware/workspacePath.ts";
 import { threadWorkspaceRoot } from "../../../project/threadWorkspaceRoot.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import { HardwareToolkit } from "./tools.ts";
 
-const workspaceDirectory = Effect.fn("hardware.workspaceDirectory")(function* (requested: string) {
+const callerWorkspaceRoot = Effect.fn("hardware.callerWorkspaceRoot")(function* () {
   const scope = yield* McpInvocationContext.McpInvocationContext;
   const workspaceRoot = scope.thread
     ? yield* threadWorkspaceRoot(scope.thread.threadId)
@@ -16,10 +17,14 @@ const workspaceDirectory = Effect.fn("hardware.workspaceDirectory")(function* (r
   if (!workspaceRoot) {
     return yield* new HardwareToolError({
       code: "invalid_path",
-      message: "This thread has no workspace to put a project in.",
+      message: "This thread has no workspace.",
     });
   }
-  return yield* resolveInWorkspace(workspaceRoot, requested);
+  return workspaceRoot;
+});
+
+const workspaceDirectory = Effect.fn("hardware.workspaceDirectory")(function* (requested: string) {
+  return yield* resolveInWorkspace(yield* callerWorkspaceRoot(), requested);
 });
 
 export const layer = McpToolAccess.toLayer(HardwareToolkit, {
@@ -68,6 +73,36 @@ export const layer = McpToolAccess.toLayer(HardwareToolkit, {
       const hardware = yield* HardwareService.HardwareService;
       const directory = yield* workspaceDirectory(input.path);
       return yield* hardware.sdkconfigSet({ ...input, directory });
+    }),
+  ),
+  kicad_erc: McpToolAccess.actsAsCaller((input) =>
+    Effect.gen(function* () {
+      const kicad = yield* KicadService.KicadService;
+      return yield* kicad.erc({ ...input, workspaceRoot: yield* callerWorkspaceRoot() });
+    }),
+  ),
+  kicad_drc: McpToolAccess.actsAsCaller((input) =>
+    Effect.gen(function* () {
+      const kicad = yield* KicadService.KicadService;
+      return yield* kicad.drc({ ...input, workspaceRoot: yield* callerWorkspaceRoot() });
+    }),
+  ),
+  kicad_netlist: McpToolAccess.actsAsCaller((input) =>
+    Effect.gen(function* () {
+      const kicad = yield* KicadService.KicadService;
+      return yield* kicad.netlist({ ...input, workspaceRoot: yield* callerWorkspaceRoot() });
+    }),
+  ),
+  kicad_bom: McpToolAccess.actsAsCaller((input) =>
+    Effect.gen(function* () {
+      const kicad = yield* KicadService.KicadService;
+      return yield* kicad.bom({ ...input, workspaceRoot: yield* callerWorkspaceRoot() });
+    }),
+  ),
+  kicad_fab_export: McpToolAccess.actsAsCaller((input) =>
+    Effect.gen(function* () {
+      const kicad = yield* KicadService.KicadService;
+      return yield* kicad.fabExport({ ...input, workspaceRoot: yield* callerWorkspaceRoot() });
     }),
   ),
 });
