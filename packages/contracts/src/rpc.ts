@@ -309,7 +309,7 @@ import {
   DeviceShutdownInput,
 } from "./device.ts";
 import {
-  HardwareBuildResult,
+  HardwareBuildEvent,
   HardwareDoctorInput,
   HardwareDoctorReport,
   HardwareProjectBuildInput,
@@ -1706,8 +1706,9 @@ const WsHardwareProjectsRpc = Rpc.make(WS_METHODS.hardwareProjects, {
 
 const WsHardwareBuildRpc = Rpc.make(WS_METHODS.hardwareBuild, {
   payload: HardwareProjectBuildInput,
-  success: HardwareBuildResult,
+  success: HardwareBuildEvent,
   error: Schema.Union([HardwareToolError, EnvironmentAuthorizationError]),
+  stream: true,
 });
 
 const WsDeviceConfigureRpc = Rpc.make(WS_METHODS.deviceConfigure, {

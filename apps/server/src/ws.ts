@@ -1,4 +1,8 @@
-import { HardwareToolError, OrchestrationDispatchCommandError } from "@t3tools/contracts";
+import {
+  type HardwareBuildEvent,
+  HardwareToolError,
+  OrchestrationDispatchCommandError,
+} from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Orchestrator from "./orchestration-v2/Orchestrator.ts";
@@ -1434,6 +1438,10 @@ export const layerWsRpc = (
       });
       const deviceHostContext =
         yield* Effect.context<Effect.Services<ReturnType<typeof remoteSshDeviceHosts>>>();
+      const hardwareWorkspaceContext = yield* Effect.context<
+        | Effect.Services<ReturnType<typeof requireHardwareWorkspace>>
+        | Effect.Services<ReturnType<typeof resolveInWorkspace>>
+      >();
       const orchestrationEngine = yield* Orchestrator.OrchestratorV2;
       const random = yield* SecureRandom.SecureRandom;
       // RPC client ids are only unique within one socket; terminals share viewers across sockets.
@@ -3209,9 +3217,20 @@ export const layerWsRpc = (
             Effect.map((projects) => ({ projects })),
           ),
         [WS_METHODS.hardwareBuild]: (input) =>
-          requireHardwareWorkspace(input).pipe(
-            Effect.flatMap((workspaceRoot) => resolveInWorkspace(workspaceRoot, input.path)),
-            Effect.flatMap((directory) => hardwareService.build({ path: input.path, directory })),
+          Stream.callback<HardwareBuildEvent, HardwareToolError>((queue) =>
+            requireHardwareWorkspace(input).pipe(
+              Effect.flatMap((workspaceRoot) => resolveInWorkspace(workspaceRoot, input.path)),
+              Effect.flatMap((directory) =>
+                hardwareService.build({ path: input.path, directory }, (text) => {
+                  Queue.offerUnsafe(queue, { type: "output", text });
+                }),
+              ),
+              Effect.flatMap((result) => Queue.offer(queue, { type: "complete", result })),
+              Effect.catch((error) => Queue.fail(queue, error)),
+              Effect.andThen(Queue.end(queue)),
+              Effect.provide(hardwareWorkspaceContext),
+              Effect.forkScoped,
+            ),
           ),
         [WS_METHODS.deviceList]: (input) =>
           input.inspectOnly && !input.updateTool

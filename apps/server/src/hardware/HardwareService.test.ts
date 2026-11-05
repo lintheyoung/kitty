@@ -225,3 +225,29 @@ it.effect("returns a failed build's diagnostics instead of failing the call", ()
     assert.equal(notProject.code, "invalid_path");
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
+
+it.effect("streams build output as it arrives, keeping split UTF-8 characters whole", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const { home } = yield* espHome();
+    const directory = path.join(home, "app");
+    yield* fs.makeDirectory(directory);
+    yield* fs.writeFileString(path.join(directory, "CMakeLists.txt"), "");
+    const bytes = new TextEncoder().encode("[1/2] 编译\n[2/2] done\n");
+    const chunks: Array<string> = [];
+    const result = yield* withRunner(
+      home,
+      (input) => {
+        // Split inside the three-byte "编" so the decoder has to carry it over.
+        input.onStdoutChunk?.(bytes.slice(0, 7));
+        input.onStdoutChunk?.(bytes.slice(7));
+        return output(new TextDecoder().decode(bytes));
+      },
+      (service) => service.build({ path: "app", directory }, (text) => chunks.push(text)),
+    );
+    assert.isTrue(result.ok);
+    assert.equal(chunks.join(""), "[1/2] 编译\n[2/2] done\n");
+    assert.isFalse(chunks.some((chunk) => chunk.includes("�")));
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);

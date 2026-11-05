@@ -17,11 +17,25 @@ import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 
 type BuildState =
-  | { readonly status: "running" }
+  | { readonly status: "running"; readonly log: string }
   | { readonly status: "done"; readonly result: HardwareBuildResult }
   | { readonly status: "failed"; readonly message: string };
 
 const kib = (bytes: number) => `${Math.round(bytes / 1024)} KB`;
+const ANSI = /\u001b\[[0-9;]*[A-Za-z]/g;
+/** Keeps the live log bounded; the full log stays on the server side. */
+const MAX_LIVE_LOG_CHARS = 64_000;
+
+/** `idf.py` output as it streams in; the reversed column keeps the newest line in view. */
+function LiveBuildLog(props: { readonly log: string }) {
+  return (
+    <div className="flex max-h-48 flex-col-reverse overflow-auto rounded bg-muted p-2">
+      <pre className="font-mono text-2xs whitespace-pre-wrap text-muted-foreground">
+        {props.log.length > 0 ? props.log : "Starting idf.py build…"}
+      </pre>
+    </div>
+  );
+}
 
 /** Workspace path of a diagnostic's file, or null for files outside the project. */
 function workspacePath(project: HardwareProject, diagnostic: HardwareBuildDiagnostic) {
@@ -35,7 +49,7 @@ function BuildOutcome(props: {
   readonly state: BuildState;
 }) {
   const { state } = props;
-  if (state.status === "running") return null;
+  if (state.status === "running") return <LiveBuildLog log={state.log} />;
   if (state.status === "failed") {
     return <p className="text-xs text-destructive-foreground">{state.message}</p>;
   }
@@ -115,11 +129,20 @@ export function HardwareProjects(props: {
   const [builds, setBuilds] = useState<Readonly<Record<string, BuildState>>>({});
 
   const build = async (project: HardwareProject) => {
-    setBuilds((current) => ({ ...current, [project.path]: { status: "running" } }));
+    setBuilds((current) => ({ ...current, [project.path]: { status: "running", log: "" } }));
+    const onOutput = (text: string) => {
+      const clean = text.replace(ANSI, "").replaceAll("\r\n", "\n");
+      setBuilds((current) => {
+        const previous = current[project.path];
+        if (previous?.status !== "running") return current;
+        const log = (previous.log + clean).slice(-MAX_LIVE_LOG_CHARS);
+        return { ...current, [project.path]: { status: "running", log } };
+      });
+    };
     const result = await runAtomCommand(
       appAtomRegistry,
       hardwareBuild,
-      { environmentId, input: { threadId, projectId, path: project.path } },
+      { environmentId, input: { threadId, projectId, path: project.path }, onOutput },
       { reportFailure: false },
     );
     setBuilds((current) => ({

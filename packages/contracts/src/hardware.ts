@@ -175,3 +175,10 @@ export const HardwareProjectBuildInput = Schema.Struct({
   path: Schema.String,
 });
 export type HardwareProjectBuildInput = typeof HardwareProjectBuildInput.Type;
+
+/** A streamed build: output as idf.py prints it, then the parsed result. */
+export const HardwareBuildEvent = Schema.Union([
+  Schema.Struct({ type: Schema.Literal("output"), text: Schema.String }),
+  Schema.Struct({ type: Schema.Literal("complete"), result: HardwareBuildResult }),
+]);
+export type HardwareBuildEvent = typeof HardwareBuildEvent.Type;

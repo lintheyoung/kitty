@@ -57,8 +57,10 @@ export class HardwareService extends Context.Service<
     readonly createProject: (
       input: HardwareProjectCreateInput & { readonly directory: string },
     ) => Effect.Effect<HardwareProjectCreated, HardwareToolError>;
+    /** `onOutput` receives build output as it is printed, for live logs. */
     readonly build: (
       input: HardwareBuildInput & { readonly directory: string },
+      onOutput?: (text: string) => void,
     ) => Effect.Effect<HardwareBuildResult, HardwareToolError>;
     /** ESP-IDF projects up to three levels below `workspaceRoot`. */
     readonly listProjects: (workspaceRoot: string) => Effect.Effect<ReadonlyArray<HardwareProject>>;
@@ -67,6 +69,15 @@ export class HardwareService extends Context.Service<
 
 const MAC_KICAD_CLI = "/Applications/KiCad/KiCad.app/Contents/MacOS/kicad-cli";
 const pinnedIdf = `${SUPPORTED_IDF.major}.${SUPPORTED_IDF.minor}`;
+
+/** Decodes chunked process output without splitting multi-byte characters. */
+function utf8Chunks(onText: (text: string) => void) {
+  const decoder = new TextDecoder();
+  return (chunk: Uint8Array) => {
+    const text = decoder.decode(chunk, { stream: true });
+    if (text.length > 0) onText(text);
+  };
+}
 
 interface FoundIdf {
   readonly path: string;
@@ -318,19 +329,22 @@ export const make = Effect.fn("HardwareService.make")(function* () {
     cwd: string,
     args: ReadonlyArray<string>,
     timeout: ProcessRunner.ProcessRunInput["timeout"],
+    onOutput?: (text: string) => void,
   ) =>
     processRunner
       .run({
         command: "/bin/bash",
+        // stderr joins stdout so live output keeps compiler errors in order.
         args: [
           "-c",
-          '. "$IDF_PATH/export.sh" >/dev/null 2>&1 && exec idf.py "$@"',
+          '. "$IDF_PATH/export.sh" >/dev/null 2>&1 && exec idf.py "$@" 2>&1',
           "idf.py",
           ...args,
         ],
         cwd,
         env: { ...env, IDF_PATH: idf.path },
         timeout,
+        ...(onOutput ? { onStdoutChunk: utf8Chunks(onOutput) } : {}),
         outputMode: "truncate",
         timeoutBehavior: "timedOutResult",
       })
@@ -420,6 +434,7 @@ export const make = Effect.fn("HardwareService.make")(function* () {
 
   const build = Effect.fn("HardwareService.build")(function* (
     input: HardwareBuildInput & { readonly directory: string },
+    onOutput?: (text: string) => void,
   ) {
     const { idf, env } = yield* requireIdf();
     if (!(yield* exists(path.join(input.directory, "CMakeLists.txt")))) {
@@ -429,7 +444,7 @@ export const make = Effect.fn("HardwareService.make")(function* () {
       );
     }
     const started = yield* Clock.currentTimeMillis;
-    const result = yield* runIdf(idf, env, input.directory, ["build"], "20 minutes");
+    const result = yield* runIdf(idf, env, input.directory, ["build"], "20 minutes", onOutput);
     const durationMs = (yield* Clock.currentTimeMillis) - started;
     const output = `${result.stdout}\n${result.stderr}`;
     const appBinary = parseAppBinarySize(output);
