@@ -236,7 +236,10 @@ export const make = Effect.fn("HardwareService.make")(function* () {
         : {
             id: "serial",
             status: "warning",
-            detail: "No board connected. Plug in the ESP32-S3 over USB.",
+            detail:
+              platform === "darwin"
+                ? 'No board found. Plug in the ESP32-S3 with a data cable (not charge-only), directly rather than through a hub, and allow it in the macOS "Allow accessory to connect" prompt (System Settings > Privacy & Security).'
+                : "No board found. Plug in the ESP32-S3 with a data cable (not charge-only), and check that your user can open serial devices (e.g. the dialout group).",
           },
     ];
     const idfInstallations: ReadonlyArray<HardwareIdfInstallation> = found.map((idf) => ({
