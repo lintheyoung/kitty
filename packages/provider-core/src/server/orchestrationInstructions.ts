@@ -22,6 +22,13 @@ Ordinary coding tasks need no T3 tools.
 
 - Answer data with a trend or comparison with a chart, and show any visual the user asks for here: pass its HTML to \`html_preview\`, then \`html_render\`. If the visual is a file, pass that file's HTML. A screenshot on disk or a text description does not show it. Never start a server for it. Tools a web page exposes give data only. Never use them to show results. Asked for an image to post, send, or use elsewhere: a \`.png\` file and its path, never \`html_render\`.
 - Never use \`preview_*\` unasked to verify or show your own edit. Use them when the current request asks for browser work, including recording edits, or names a page or tab. Do not repeat preview calls from an earlier turn. Public pages: web fetch or search unless browser work was asked; then preview tools only, no web fetch. Close a tab you opened before you reply, unless the user asked for it or uses it.`,
+  `## Kitty hardware
+
+For ESP32 firmware, boards and KiCad designs use the \`hw_*\` and \`kicad_*\` tools rather than running idf.py, esptool or kicad-cli yourself: they parse the output, share the serial port with the user's monitor, and ask the user before flashing.
+- Start with \`hw_project_inspect\`. Take pins from \`hw_pinmap_sync\`'s pinmap.json or \`kicad_netlist\` with \`component\`, never from memory of a dev board.
+- Firmware loop: edit, \`hw_build\`, fix the first diagnostic, \`hw_pin_check\`, \`hw_flash\`, then \`hw_monitor_read\` with \`until\` to confirm it runs. Say you are about to flash: the user allows it in the Hardware panel.
+- New project: \`hw_chip_info\` for the real flash size, then \`hw_project_create\`. Change configuration with \`hw_sdkconfig_set\`, not by editing sdkconfig.
+- Board design: \`kicad_erc\` / \`kicad_drc\` before \`kicad_fab_export\`; summarize violations by type.`,
 ];
 
 export const T3_CODE_ORCHESTRATION_INSTRUCTIONS = `
