@@ -1,10 +1,13 @@
+import { KITTY_DEV_PROTOCOL_SCHEME, KITTY_PROTOCOL_SCHEME } from "./kittyBrand.ts";
 import { isLoopbackHost } from "./preview.ts";
 
 export function providerAuthReturnUrl(value: string | undefined): string | undefined {
   if (!value) return undefined;
   try {
     const url = new URL(value);
-    const desktop = ["t3code:", "t3code-dev:"].includes(url.protocol) && url.host === "app";
+    const desktop =
+      [`${KITTY_PROTOCOL_SCHEME}:`, `${KITTY_DEV_PROTOCOL_SCHEME}:`].includes(url.protocol) &&
+      url.host === "app";
     const web =
       ["http:", "https:"].includes(url.protocol) &&
       (isLoopbackHost(url.hostname) || url.origin === "https://app.t3.codes");

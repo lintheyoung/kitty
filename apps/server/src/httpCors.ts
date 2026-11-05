@@ -1,3 +1,4 @@
+import { KITTY_DEV_PROTOCOL_SCHEME, KITTY_PROTOCOL_SCHEME } from "@t3tools/shared/kittyBrand";
 import { ORCHESTRATION_PROTOCOL_HEADER } from "@t3tools/contracts";
 
 export const browserApiCorsAllowedMethods = ["GET", "POST", "OPTIONS"] as const;
@@ -10,4 +11,7 @@ export const browserApiCorsAllowedHeaders = [
   ORCHESTRATION_PROTOCOL_HEADER,
 ] as const;
 
-export const DESKTOP_RENDERER_ORIGINS = ["t3code://app", "t3code-dev://app"] as const;
+export const DESKTOP_RENDERER_ORIGINS = [
+  `${KITTY_PROTOCOL_SCHEME}://app`,
+  `${KITTY_DEV_PROTOCOL_SCHEME}://app`,
+] as const;

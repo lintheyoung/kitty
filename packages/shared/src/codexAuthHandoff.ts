@@ -1,3 +1,4 @@
+import { KITTY_DEV_PROTOCOL_SCHEME, KITTY_PROTOCOL_SCHEME } from "./kittyBrand.ts";
 import { EnvironmentId, ProviderInstanceId } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import { providerAuthReturnUrl } from "./providerAuthReturnUrl.ts";
@@ -87,7 +88,9 @@ export function codexCallbackUrl(value: string, redirectUri: string, state: stri
 }
 
 export function codexAuthHandoffUrl(input: CodexAuthHandoff, development = false) {
-  const url = new URL(`${development ? "t3code-dev" : "t3code"}://auth/codex`);
+  const url = new URL(
+    `${development ? KITTY_DEV_PROTOCOL_SCHEME : KITTY_PROTOCOL_SCHEME}://auth/codex`,
+  );
   url.searchParams.set("request", encodeHandoff(input));
   return url.toString();
 }
@@ -97,7 +100,7 @@ export function readCodexAuthHandoff(value: string, development: boolean) {
     const url = new URL(value);
     if (
       value.length > 32_768 ||
-      url.protocol !== (development ? "t3code-dev:" : "t3code:") ||
+      url.protocol !== `${development ? KITTY_DEV_PROTOCOL_SCHEME : KITTY_PROTOCOL_SCHEME}:` ||
       url.host !== "auth" ||
       url.pathname !== "/codex" ||
       url.username ||
