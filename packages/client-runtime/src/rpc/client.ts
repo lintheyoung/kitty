@@ -71,14 +71,17 @@ export type EnvironmentSubscriptionRpcTag =
   | typeof WS_METHODS.subscribeWorktreeSetup
   | typeof WS_METHODS.subscribeProjectClones
   | typeof WS_METHODS.terminalAttach
-  | typeof WS_METHODS.terminalObserve;
+  | typeof WS_METHODS.terminalObserve
+  | typeof WS_METHODS.hardwareMonitor
+  | typeof WS_METHODS.hardwareApprovals;
 
 export type EnvironmentStreamCommandRpcTag =
   | typeof WS_METHODS.chatGptHandoffSubscribe
   | typeof WS_METHODS.cloudInstallRelayClient
   | typeof WS_METHODS.serverUpdateServerWithProgress
   | typeof WS_METHODS.gitRunStackedAction
-  | typeof WS_METHODS.hardwareBuild;
+  | typeof WS_METHODS.hardwareBuild
+  | typeof WS_METHODS.hardwareFlash;
 
 export type EnvironmentStreamRpcTag =
   | EnvironmentSubscriptionRpcTag

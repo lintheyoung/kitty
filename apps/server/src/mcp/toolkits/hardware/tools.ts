@@ -5,6 +5,13 @@ import {
   HardwareChipInfoInput,
   HardwareDoctorInput,
   HardwareDoctorReport,
+  HardwareFlashInput,
+  HardwareFlashResult,
+  HardwareMonitorReadInput,
+  HardwareMonitorReadResult,
+  HardwarePortsResult,
+  HardwareResetInput,
+  HardwareResetResult,
   HardwareProjectCreated,
   HardwareProjectCreateInput,
   HardwareSdkconfigGetInput,
@@ -142,6 +149,58 @@ const HardwareSdkconfigSetTool = Tool.make("hw_sdkconfig_set", {
   .annotate(Tool.Idempotent, true)
   .annotate(Tool.OpenWorld, false);
 
+const HardwarePortsTool = Tool.make("hw_ports", {
+  description:
+    "List serial ports with what each is (ESP32 native USB, CP210x, CH34x, FTDI), its USB serial number, and who is using it. Use the device as port in other hw_ tools.",
+  parameters: Tool.EmptyParams,
+  success: HardwarePortsResult,
+  failure: HardwareFailure,
+  dependencies: callerDependencies,
+})
+  .annotate(Tool.Title, "List serial ports")
+  .annotate(Tool.Readonly, true)
+  .annotate(Tool.Destructive, false)
+  .annotate(Tool.Idempotent, true)
+  .annotate(Tool.OpenWorld, false);
+
+const HardwareMonitorReadTool = Tool.make("hw_monitor_read", {
+  description:
+    "Read what the board prints on its serial port for a few seconds, by default right after a reset so you see the boot log and app_main output. Pass until to stop at an expected line. Use after hw_flash to check the firmware runs.",
+  parameters: HardwareMonitorReadInput,
+  success: HardwareMonitorReadResult,
+  failure: HardwareFailure,
+  dependencies: callerDependencies,
+})
+  .annotate(Tool.Title, "Read serial log")
+  .annotate(Tool.Readonly, true)
+  .annotate(Tool.Destructive, false)
+  .annotate(Tool.OpenWorld, false);
+
+const HardwareResetTool = Tool.make("hw_reset", {
+  description: "Reset the board (pulse EN through the serial port), restarting the firmware.",
+  parameters: HardwareResetInput,
+  success: HardwareResetResult,
+  failure: HardwareFailure,
+  dependencies: callerDependencies,
+})
+  .annotate(Tool.Title, "Reset board")
+  .annotate(Tool.Destructive, false)
+  .annotate(Tool.Idempotent, true)
+  .annotate(Tool.OpenWorld, false);
+
+const HardwareFlashTool = Tool.make("hw_flash", {
+  description:
+    "Build if needed and flash an ESP-IDF project to the board. The user must allow it in Kitty's Hardware panel first, so tell them you are about to flash; the call waits up to 5 minutes for their answer. The first flash of a board saves a full flash backup. Then call hw_monitor_read to check it runs.",
+  parameters: HardwareFlashInput,
+  success: HardwareFlashResult,
+  failure: HardwareFailure,
+  dependencies: workspaceDependencies,
+})
+  .annotate(Tool.Title, "Flash firmware to board")
+  .annotate(Tool.Destructive, true)
+  .annotate(Tool.Idempotent, false)
+  .annotate(Tool.OpenWorld, false);
+
 const KicadErcTool = Tool.make("kicad_erc", {
   description:
     "Run KiCad's electrical rules check on a schematic. Returns counts per check and the violations (errors first, max 100) with the symbol, pin and position involved.",
@@ -219,6 +278,10 @@ export const HardwareToolkit = Toolkit.make(
   HardwareSetTargetTool,
   HardwareSdkconfigGetTool,
   HardwareSdkconfigSetTool,
+  HardwarePortsTool,
+  HardwareMonitorReadTool,
+  HardwareResetTool,
+  HardwareFlashTool,
   KicadErcTool,
   KicadDrcTool,
   KicadNetlistTool,

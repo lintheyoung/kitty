@@ -312,7 +312,16 @@ import {
   HardwareBuildEvent,
   HardwareDoctorInput,
   HardwareDoctorReport,
+  HardwareApprovalRespondInput,
+  HardwareApprovalsEvent,
+  HardwareApprovalsInput,
+  HardwareFlashEvent,
+  HardwareMonitorEvent,
+  HardwareMonitorInput,
+  HardwarePortsInput,
+  HardwarePortsResult,
   HardwareProjectBuildInput,
+  HardwareProjectFlashInput,
   HardwareProjectsInput,
   HardwareProjectsResult,
   HardwareToolError,
@@ -500,6 +509,11 @@ export const WS_METHODS = {
   hardwareDoctor: "hardware.doctor",
   hardwareProjects: "hardware.projects",
   hardwareBuild: "hardware.build",
+  hardwarePorts: "hardware.ports",
+  hardwareFlash: "hardware.flash",
+  hardwareMonitor: "hardware.monitor",
+  hardwareApprovals: "hardware.approvals",
+  hardwareApprovalRespond: "hardware.approvalRespond",
   deviceTestHost: "device.testHost",
   deviceEasAccount: "device.easAccount",
   deviceSimlockIdentity: "device.simlockIdentity",
@@ -1711,6 +1725,39 @@ const WsHardwareBuildRpc = Rpc.make(WS_METHODS.hardwareBuild, {
   stream: true,
 });
 
+const WsHardwarePortsRpc = Rpc.make(WS_METHODS.hardwarePorts, {
+  payload: HardwarePortsInput,
+  success: HardwarePortsResult,
+  error: Schema.Union([HardwareToolError, EnvironmentAuthorizationError]),
+});
+
+const WsHardwareFlashRpc = Rpc.make(WS_METHODS.hardwareFlash, {
+  payload: HardwareProjectFlashInput,
+  success: HardwareFlashEvent,
+  error: Schema.Union([HardwareToolError, EnvironmentAuthorizationError]),
+  stream: true,
+});
+
+const WsHardwareMonitorRpc = Rpc.make(WS_METHODS.hardwareMonitor, {
+  payload: HardwareMonitorInput,
+  success: HardwareMonitorEvent,
+  error: Schema.Union([HardwareToolError, EnvironmentAuthorizationError]),
+  stream: true,
+});
+
+const WsHardwareApprovalsRpc = Rpc.make(WS_METHODS.hardwareApprovals, {
+  payload: HardwareApprovalsInput,
+  success: HardwareApprovalsEvent,
+  error: EnvironmentAuthorizationError,
+  stream: true,
+});
+
+const WsHardwareApprovalRespondRpc = Rpc.make(WS_METHODS.hardwareApprovalRespond, {
+  payload: HardwareApprovalRespondInput,
+  success: Schema.Struct({ answered: Schema.Boolean }),
+  error: EnvironmentAuthorizationError,
+});
+
 const WsDeviceConfigureRpc = Rpc.make(WS_METHODS.deviceConfigure, {
   payload: DeviceConfigureInput,
   success: DeviceServiceState,
@@ -2207,6 +2254,11 @@ export const WsRpcGroup = RpcGroup.make(
   WsHardwareDoctorRpc,
   WsHardwareProjectsRpc,
   WsHardwareBuildRpc,
+  WsHardwarePortsRpc,
+  WsHardwareFlashRpc,
+  WsHardwareMonitorRpc,
+  WsHardwareApprovalsRpc,
+  WsHardwareApprovalRespondRpc,
   WsDeviceTestHostRpc,
   WsDeviceEasAccountRpc,
   WsDeviceSimlockIdentityRpc,

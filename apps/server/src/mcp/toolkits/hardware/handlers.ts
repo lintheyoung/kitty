@@ -75,6 +75,35 @@ export const layer = McpToolAccess.toLayer(HardwareToolkit, {
       return yield* hardware.sdkconfigSet({ ...input, directory });
     }),
   ),
+  hw_ports: McpToolAccess.actsAsCaller(() =>
+    Effect.gen(function* () {
+      const hardware = yield* HardwareService.HardwareService;
+      return yield* hardware.ports;
+    }),
+  ),
+  hw_monitor_read: McpToolAccess.actsAsCaller((input) =>
+    Effect.gen(function* () {
+      const hardware = yield* HardwareService.HardwareService;
+      return yield* hardware.monitorRead(input);
+    }),
+  ),
+  hw_reset: McpToolAccess.actsAsCaller((input) =>
+    Effect.gen(function* () {
+      const hardware = yield* HardwareService.HardwareService;
+      return yield* hardware.reset(input);
+    }),
+  ),
+  hw_flash: McpToolAccess.actsAsCaller((input) =>
+    Effect.gen(function* () {
+      const hardware = yield* HardwareService.HardwareService;
+      const scope = yield* McpInvocationContext.McpInvocationContext;
+      const directory = yield* workspaceDirectory(input.path);
+      return yield* hardware.flash(
+        { ...input, directory },
+        { approvalFor: { threadId: scope.thread?.threadId } },
+      );
+    }),
+  ),
   kicad_erc: McpToolAccess.actsAsCaller((input) =>
     Effect.gen(function* () {
       const kicad = yield* KicadService.KicadService;

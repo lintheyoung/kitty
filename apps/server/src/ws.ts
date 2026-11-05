@@ -1,5 +1,7 @@
 import {
   type HardwareBuildEvent,
+  type HardwareFlashEvent,
+  type HardwareMonitorEvent,
   HardwareToolError,
   OrchestrationDispatchCommandError,
 } from "@t3tools/contracts";
@@ -3232,6 +3234,47 @@ export const layerWsRpc = (
               Effect.forkScoped,
             ),
           ),
+        [WS_METHODS.hardwarePorts]: () => hardwareService.ports,
+        // A flash the user starts in the panel needs no further approval.
+        [WS_METHODS.hardwareFlash]: (input) =>
+          Stream.callback<HardwareFlashEvent, HardwareToolError>((queue) =>
+            requireHardwareWorkspace(input).pipe(
+              Effect.flatMap((workspaceRoot) => resolveInWorkspace(workspaceRoot, input.path)),
+              Effect.flatMap((directory) =>
+                hardwareService.flash(
+                  { path: input.path, directory, ...(input.port ? { port: input.port } : {}) },
+                  {
+                    onOutput: (text) => {
+                      Queue.offerUnsafe(queue, { type: "output", text });
+                    },
+                  },
+                ),
+              ),
+              Effect.flatMap((result) => Queue.offer(queue, { type: "complete", result })),
+              Effect.catch((error) => Queue.fail(queue, error)),
+              Effect.andThen(Queue.end(queue)),
+              Effect.provide(hardwareWorkspaceContext),
+              Effect.forkScoped,
+            ),
+          ),
+        [WS_METHODS.hardwareMonitor]: (input) =>
+          Stream.callback<HardwareMonitorEvent, HardwareToolError>((queue) =>
+            hardwareService
+              .monitor(input, (event) => {
+                Queue.offerUnsafe(queue, event);
+              })
+              .pipe(
+                Effect.catch((error) => Queue.fail(queue, error)),
+                Effect.andThen(Queue.end(queue)),
+                Effect.forkScoped,
+              ),
+          ),
+        [WS_METHODS.hardwareApprovals]: () =>
+          hardwareService.approvals.pipe(Stream.map((pending) => ({ pending }))),
+        [WS_METHODS.hardwareApprovalRespond]: (input) =>
+          hardwareService
+            .respondApproval(input.id, input.allow)
+            .pipe(Effect.map((answered) => ({ answered }))),
         [WS_METHODS.deviceList]: (input) =>
           input.inspectOnly && !input.updateTool
             ? deviceService.inspect

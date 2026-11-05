@@ -17,21 +17,42 @@ import {
   type HardwareSdkconfigSetResult,
   type HardwareSetTargetInput,
   type HardwareSetTargetResult,
+  type HardwareFlashBackup,
+  type HardwareFlashBackupMode,
+  type HardwareFlashInput,
+  type HardwareFlashResult,
+  type HardwareMonitorEvent,
+  type HardwareMonitorInput,
+  type HardwareMonitorReadInput,
+  type HardwareMonitorReadResult,
+  type HardwarePortsResult,
+  type HardwareResetInput,
+  type HardwareResetResult,
+  type HardwareApproval,
   HardwareToolError,
+  type ThreadId,
 } from "@t3tools/contracts";
+import { KITTY_HOME_DIRNAME } from "@t3tools/shared/kittyBrand";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
+import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import type * as Stream from "effect/Stream";
 
 import * as ProcessRunner from "../processRunner.ts";
 import { logTail, parseAppBinarySize, parseBuildDiagnostics } from "./buildOutput.ts";
 import { parseEsptoolChipInfo } from "./esptoolOutput.ts";
+import { makeHardwareApprovals } from "./hardwareApprovals.ts";
 import { kicadCliCandidates } from "./KicadService.ts";
+import { makeSerialLeases } from "./serialLeases.ts";
+import { LIST_PORTS_SCRIPT, MONITOR_SCRIPT, monitorTail, parsePortList } from "./serialPorts.ts";
 import {
   applySdkconfigUpdates,
   encodeSdkconfigValue,
@@ -80,6 +101,31 @@ export class HardwareService extends Context.Service<
       input: HardwareBuildInput & { readonly directory: string },
       onOutput?: (text: string) => void,
     ) => Effect.Effect<HardwareBuildResult, HardwareToolError>;
+    /** Serial ports with what each is (native USB, CP210x, CH34x…) and who holds it. */
+    readonly ports: Effect.Effect<HardwarePortsResult, HardwareToolError>;
+    /** Listens to a board for a few seconds (after a reset, by default). */
+    readonly monitorRead: (
+      input: HardwareMonitorReadInput,
+    ) => Effect.Effect<HardwareMonitorReadResult, HardwareToolError>;
+    /** The panel's live monitor; yields the port to flashes and agent reads. */
+    readonly monitor: (
+      input: HardwareMonitorInput,
+      onEvent: (event: HardwareMonitorEvent) => void,
+    ) => Effect.Effect<void, HardwareToolError>;
+    readonly reset: (
+      input: HardwareResetInput,
+    ) => Effect.Effect<HardwareResetResult, HardwareToolError>;
+    /** Backs the board up (first time), then `idf.py flash`, which builds first if needed. */
+    readonly flash: (
+      input: HardwareFlashInput & { readonly directory: string },
+      options?: {
+        readonly onOutput?: ((text: string) => void) | undefined;
+        readonly approvalFor?: { readonly threadId?: ThreadId | undefined } | undefined;
+      },
+    ) => Effect.Effect<HardwareFlashResult, HardwareToolError>;
+    /** Agent flashes waiting for the user's answer. */
+    readonly approvals: Stream.Stream<ReadonlyArray<HardwareApproval>>;
+    readonly respondApproval: (id: string, allow: boolean) => Effect.Effect<boolean>;
     /** Switches the chip; regenerates sdkconfig from sdkconfig.defaults and clears the build. */
     readonly setTarget: (
       input: HardwareSetTargetInput & { readonly directory: string },
@@ -105,6 +151,12 @@ function utf8Chunks(onText: (text: string) => void) {
     const text = decoder.decode(chunk, { stream: true });
     if (text.length > 0) onText(text);
   };
+}
+
+/** "4MB" → 4 MiB; undefined for anything esptool did not report as a size. */
+function flashSizeBytes(size: string | undefined): number | undefined {
+  const match = /^(\d+)MB$/.exec(size?.trim() ?? "");
+  return match ? Number(match[1]) * 1024 * 1024 : undefined;
 }
 
 interface FoundIdf {
@@ -380,19 +432,60 @@ export const make = Effect.fn("HardwareService.make")(function* () {
         ),
       );
 
-  const chipInfo = Effect.fn("HardwareService.chipInfo")(function* (input: HardwareChipInfoInput) {
-    const { bin, serialPorts } = yield* requireIdf();
-    const port = input.port?.trim() || serialPorts[0];
-    if (!port) return yield* failure("no_board", "No board is connected. Run hw_doctor.");
-    if (!input.port && serialPorts.length > 1) {
+  const leases = makeSerialLeases();
+  const approvals = yield* makeHardwareApprovals();
+  /** Last USB serial number seen on each device, to follow a board that re-enumerates. */
+  const serialNumbers = new Map<string, string>();
+
+  const python = (bin: string) => path.join(bin, "python");
+
+  const listPorts = Effect.fn("HardwareService.listPorts")(function* () {
+    const { bin } = yield* requireIdf();
+    const result = yield* processRunner
+      .run({ command: python(bin), args: ["-c", LIST_PORTS_SCRIPT], timeout: "20 seconds" })
+      .pipe(Effect.mapError((cause) => failure("command_failed", cause.message)));
+    const holders = leases.holders();
+    return parsePortList(result.stdout).map((port) => {
+      if (port.serialNumber) serialNumbers.set(port.device, port.serialNumber);
+      const heldBy = holders.get(port.device);
+      return heldBy ? { ...port, heldBy } : port;
+    });
+  });
+
+  /**
+   * The board to talk to: the requested port, the same board under a new name
+   * after it re-enumerated, or the only board connected.
+   */
+  const resolvePort = Effect.fn("HardwareService.resolvePort")(function* (requested?: string) {
+    const ports = yield* listPorts();
+    const wanted = requested?.trim();
+    if (wanted) {
+      if (ports.some((port) => port.device === wanted)) return wanted;
+      const serial = serialNumbers.get(wanted);
+      const moved = serial ? ports.find((port) => port.serialNumber === serial) : undefined;
+      if (moved) return moved.device;
+      // Ports pyserial does not enumerate (some adapters, virtual ports) still open by path.
+      if (wanted.startsWith("/dev/") && (yield* exists(wanted))) return wanted;
+      return yield* failure("no_board", `${wanted} is not connected. Run hw_ports.`);
+    }
+    const boards = ports.filter((port) => port.kind !== "other");
+    const candidates = boards.length > 0 ? boards : ports;
+    if (candidates.length === 0) {
+      return yield* failure("no_board", "No board is connected. Run hw_doctor.");
+    }
+    if (candidates.length > 1) {
       return yield* failure(
         "board_ambiguous",
-        `Several boards are connected (${serialPorts.join(", ")}). Pass port.`,
+        `Several boards are connected (${candidates.map((port) => port.device).join(", ")}). Pass port.`,
       );
     }
+    return candidates[0]?.device ?? "";
+  });
+
+  const readChip = Effect.fn("HardwareService.readChip")(function* (bin: string, port: string) {
     const result = yield* processRunner
       .run({
-        command: path.join(bin, "python"),
+        command: python(bin),
         args: ["-m", "esptool", "--port", port, "flash_id"],
         timeout: "45 seconds",
         timeoutBehavior: "timedOutResult",
@@ -406,6 +499,270 @@ export const make = Effect.fn("HardwareService.make")(function* () {
       );
     }
     return info;
+  });
+
+  const chipInfo = Effect.fn("HardwareService.chipInfo")(function* (input: HardwareChipInfoInput) {
+    const { bin } = yield* requireIdf();
+    const port = yield* resolvePort(input.port);
+    return yield* Effect.scoped(
+      Effect.gen(function* () {
+        yield* leases.acquire(port, "agent", "a chip info read");
+        return yield* readChip(bin, port);
+      }),
+    );
+  });
+
+  /** Runs MONITOR_SCRIPT: `seconds` 0 streams until interrupted. */
+  const runMonitor = (
+    bin: string,
+    port: string,
+    options: { readonly baud: number; readonly reset: boolean; readonly seconds: number },
+    onText: (text: string) => void,
+  ) =>
+    processRunner
+      .run({
+        command: python(bin),
+        args: [
+          "-c",
+          MONITOR_SCRIPT,
+          port,
+          String(options.baud),
+          options.reset ? "1" : "0",
+          String(options.seconds),
+        ],
+        timeout: options.seconds > 0 ? `${Math.ceil(options.seconds) + 15} seconds` : "12 hours",
+        onStdoutChunk: utf8Chunks(onText),
+        maxOutputBytes: 1024 * 1024,
+        outputMode: "truncate",
+        timeoutBehavior: "timedOutResult",
+      })
+      .pipe(Effect.mapError((cause) => failure("command_failed", cause.message)));
+
+  const monitorFailure = (port: string, result: { stderr: string; code: unknown }) =>
+    result.code !== 0
+      ? failure(
+          "command_failed",
+          `Could not open ${port}. ${logTail(result.stderr.replace(/kitty-monitor-\S+\n?/g, ""), 4)}`,
+        )
+      : undefined;
+
+  const monitorRead = Effect.fn("HardwareService.monitorRead")(function* (
+    input: HardwareMonitorReadInput,
+  ) {
+    const { bin } = yield* requireIdf();
+    const port = yield* resolvePort(input.port);
+    const seconds = Math.min(60, Math.max(1, input.seconds ?? 5));
+    const until = input.until;
+    const pattern = until
+      ? yield* Effect.try({
+          try: () => new RegExp(until),
+          catch: () => failure("invalid_argument", `until is not a regular expression: ${until}`),
+        })
+      : undefined;
+    const started = yield* Clock.currentTimeMillis;
+    let text = "";
+    let matched = false;
+    const done = yield* Deferred.make<void>();
+    const result = yield* Effect.scoped(
+      Effect.gen(function* () {
+        yield* leases.acquire(port, "agent", "an agent reading the serial log");
+        return yield* runMonitor(
+          bin,
+          port,
+          { baud: input.baud ?? 115_200, reset: input.reset ?? true, seconds },
+          (chunk) => {
+            text += chunk;
+            if (pattern && !matched && pattern.test(text)) {
+              matched = true;
+              Deferred.doneUnsafe(done, Exit.void);
+            }
+          },
+        ).pipe(Effect.raceFirst(Deferred.await(done).pipe(Effect.as(undefined))));
+      }),
+    );
+    if (result) {
+      const error = monitorFailure(port, result);
+      if (error) return yield* error;
+    }
+    const tail = monitorTail(text);
+    return {
+      port,
+      text: tail.text,
+      bytes: new TextEncoder().encode(text).length,
+      truncated: tail.truncated,
+      ...(pattern ? { matched } : {}),
+      durationMs: (yield* Clock.currentTimeMillis) - started,
+    } satisfies HardwareMonitorReadResult;
+  });
+
+  /**
+   * The panel's live monitor: runs until interrupted, and closes by itself
+   * (with a `preempted` status) when a flash or an agent read needs the port.
+   */
+  const monitor = Effect.fn("HardwareService.monitor")(function* (
+    input: HardwareMonitorInput,
+    onEvent: (event: HardwareMonitorEvent) => void,
+  ) {
+    const { bin } = yield* requireIdf();
+    const port = yield* resolvePort(input.port);
+    const stop = yield* Deferred.make<void>();
+    yield* Effect.scoped(
+      Effect.gen(function* () {
+        yield* leases.acquire(port, "monitor", "the Hardware panel monitor", (by) =>
+          Effect.sync(() => onEvent({ type: "status", status: "preempted", detail: by })).pipe(
+            Effect.andThen(Deferred.succeed(stop, undefined)),
+            Effect.asVoid,
+          ),
+        );
+        onEvent({ type: "status", status: "open", detail: port });
+        const result = yield* runMonitor(
+          bin,
+          port,
+          { baud: input.baud ?? 115_200, reset: input.reset ?? false, seconds: 0 },
+          (text) => onEvent({ type: "output", text }),
+        ).pipe(Effect.raceFirst(Deferred.await(stop).pipe(Effect.as(undefined))));
+        if (result) {
+          const error = monitorFailure(port, result);
+          if (error) return yield* error;
+        }
+      }),
+    );
+    onEvent({ type: "status", status: "closed" });
+  });
+
+  const reset = Effect.fn("HardwareService.reset")(function* (input: HardwareResetInput) {
+    const { bin } = yield* requireIdf();
+    const port = yield* resolvePort(input.port);
+    const result = yield* Effect.scoped(
+      Effect.gen(function* () {
+        yield* leases.acquire(port, "reset", "a reset");
+        return yield* runMonitor(bin, port, { baud: 115_200, reset: true, seconds: 0.2 }, () => {});
+      }),
+    );
+    const error = monitorFailure(port, result);
+    if (error) return yield* error;
+    if (result.stderr.includes("kitty-monitor-reset-unsupported")) {
+      return yield* failure("command_failed", `${port} cannot reset the board (no RTS line).`);
+    }
+    return { port } satisfies HardwareResetResult;
+  });
+
+  /** A full-flash image of the board, unless `auto` finds an earlier one. */
+  const backupFlash = Effect.fn("HardwareService.backupFlash")(function* (
+    bin: string,
+    port: string,
+    mode: HardwareFlashBackupMode,
+    onOutput: (text: string) => void,
+  ) {
+    const home = yield* HostProcess.HomeDirectory;
+    const chip = yield* readChip(bin, port);
+    const bytes = flashSizeBytes(chip.flashSize);
+    if (!bytes) {
+      return yield* failure(
+        "command_failed",
+        `esptool did not report ${port}'s flash size, so Kitty cannot back it up. Pass backup: "skip" to flash anyway.`,
+      );
+    }
+    const board = (chip.mac ?? "unknown").replaceAll(":", "");
+    const directory = path.join(home, KITTY_HOME_DIRNAME, "hardware-backups", board);
+    const existing = (yield* readDirectory(directory))
+      .filter((name) => name.endsWith(".bin"))
+      .toSorted();
+    if (mode === "auto" && existing.length > 0) {
+      const file = path.join(directory, existing.at(-1) ?? "");
+      onOutput(`Kitty already has a backup of this board: ${file}\n`);
+      return { file, created: false } satisfies HardwareFlashBackup;
+    }
+    yield* fs
+      .makeDirectory(directory, { recursive: true })
+      .pipe(Effect.mapError((cause) => failure("command_failed", cause.message)));
+    const stamp = DateTime.formatIso(yield* DateTime.now).replace(/[:.]/g, "-");
+    const file = path.join(directory, `${stamp}-${chip.flashSize}.bin`);
+    onOutput(`Backing up the whole ${chip.flashSize} flash to ${file}…\n`);
+    const result = yield* processRunner
+      .run({
+        command: python(bin),
+        args: [
+          "-m",
+          "esptool",
+          "--port",
+          port,
+          "--baud",
+          "921600",
+          "read_flash",
+          "0",
+          `0x${bytes.toString(16)}`,
+          file,
+        ],
+        timeout: "10 minutes",
+        onStdoutChunk: utf8Chunks(onOutput),
+        outputMode: "truncate",
+        timeoutBehavior: "timedOutResult",
+      })
+      .pipe(Effect.mapError((cause) => failure("command_failed", cause.message)));
+    if (result.code !== 0 || result.timedOut) {
+      yield* fs.remove(file).pipe(Effect.ignore);
+      return yield* commandFailed("esptool read_flash (backup)", result);
+    }
+    return { file, created: true } satisfies HardwareFlashBackup;
+  });
+
+  const flash = Effect.fn("HardwareService.flash")(function* (
+    input: HardwareFlashInput & { readonly directory: string },
+    options: {
+      readonly onOutput?: ((text: string) => void) | undefined;
+      /** Set for agent calls: the user must allow the flash in the Hardware panel. */
+      readonly approvalFor?: { readonly threadId?: ThreadId | undefined } | undefined;
+    } = {},
+  ) {
+    const { idf, env, bin } = yield* requireIdf();
+    yield* requireProject(input);
+    const port = yield* resolvePort(input.port);
+    const onOutput = options.onOutput ?? (() => {});
+    if (options.approvalFor) {
+      const allowed = yield* approvals.request(
+        {
+          kind: "flash",
+          ...(options.approvalFor.threadId ? { threadId: options.approvalFor.threadId } : {}),
+          project: input.path,
+          port,
+        },
+        "5 minutes",
+      );
+      if (!allowed) {
+        return yield* failure(
+          "denied",
+          "The user did not allow this flash (denied, or no answer within 5 minutes in Kitty's Hardware panel). Ask them before trying again.",
+        );
+      }
+    }
+    return yield* Effect.scoped(
+      Effect.gen(function* () {
+        yield* leases.acquire(port, "flash", `a flash of ${input.path}`);
+        const started = yield* Clock.currentTimeMillis;
+        const mode = input.backup ?? "auto";
+        const backup = mode === "skip" ? undefined : yield* backupFlash(bin, port, mode, onOutput);
+        const result = yield* runIdf(
+          idf,
+          env,
+          input.directory,
+          ["-p", port, "-b", "460800", "flash"],
+          "20 minutes",
+          onOutput,
+        );
+        const output = `${result.stdout}\n${result.stderr}`;
+        // The board may come back under another name; remember it by serial number.
+        yield* listPorts().pipe(Effect.ignore);
+        return {
+          ok: result.code === 0 && !result.timedOut,
+          port,
+          durationMs: (yield* Clock.currentTimeMillis) - started,
+          ...(backup ? { backup } : {}),
+          diagnostics: parseBuildDiagnostics(output, input.directory),
+          logTail: result.timedOut ? "Flash timed out after 20 minutes." : logTail(output),
+        } satisfies HardwareFlashResult;
+      }),
+    );
   });
 
   const createProject = Effect.fn("HardwareService.createProject")(function* (
@@ -746,6 +1103,13 @@ export const make = Effect.fn("HardwareService.make")(function* () {
   return HardwareService.of({
     doctor,
     chipInfo,
+    ports: Effect.map(listPorts(), (ports) => ({ ports })),
+    monitorRead,
+    monitor,
+    reset,
+    flash,
+    approvals: approvals.pending,
+    respondApproval: approvals.respond,
     createProject,
     build,
     setTarget,

@@ -57,6 +57,8 @@ export class HardwareToolError extends Schema.TaggedError<HardwareToolError>()(
       "board_ambiguous",
       "already_exists",
       "invalid_argument",
+      "port_busy",
+      "denied",
       "command_failed",
     ]),
     message: Schema.String,
@@ -279,3 +281,175 @@ export const HardwareSdkconfigSetResult = Schema.Struct({
   persisted: Schema.Boolean,
 });
 export type HardwareSdkconfigSetResult = typeof HardwareSdkconfigSetResult.Type;
+
+/** USB serial bridges Kitty recognises by VID:PID. */
+export const HardwareSerialPortKind = Schema.Literals([
+  "esp-usb-jtag",
+  "cp210x",
+  "ch34x",
+  "ftdi",
+  "other",
+]);
+export type HardwareSerialPortKind = typeof HardwareSerialPortKind.Type;
+
+export const HardwareSerialPort = Schema.Struct({
+  device: Schema.String,
+  kind: HardwareSerialPortKind,
+  /** e.g. "ESP32-S3 native USB (USB-Serial/JTAG)". */
+  label: Schema.String,
+  vid: Schema.optional(Schema.Int),
+  pid: Schema.optional(Schema.Int),
+  /** Stays the same when the board re-enumerates; the chip MAC on native USB. */
+  serialNumber: Schema.optional(Schema.String),
+  description: Schema.optional(Schema.String),
+  /** Who holds the port right now: a flash, an agent read, or the panel monitor. */
+  heldBy: Schema.optional(Schema.String),
+});
+export type HardwareSerialPort = typeof HardwareSerialPort.Type;
+
+export const HardwarePortsInput = Schema.Struct({});
+export type HardwarePortsInput = typeof HardwarePortsInput.Type;
+
+export const HardwarePortsResult = Schema.Struct({
+  ports: Schema.Array(HardwareSerialPort),
+});
+export type HardwarePortsResult = typeof HardwarePortsResult.Type;
+
+const PortOption = Schema.optional(
+  Schema.String.annotate({
+    description: "Serial port from hw_ports. Defaults to the only connected board.",
+  }),
+);
+
+export const HardwareMonitorReadInput = Schema.Struct({
+  port: PortOption,
+  seconds: Schema.optional(
+    Schema.Number.annotate({ description: "How long to listen, 1-60 s. Default 5." }),
+  ),
+  reset: Schema.optional(
+    Schema.Boolean.annotate({
+      description: "Reset the board first so the log starts at boot. Default true.",
+    }),
+  ),
+  until: Schema.optional(
+    Schema.String.annotate({
+      description:
+        "Stop as soon as the output matches this regular expression, e.g. 'Hello world'.",
+    }),
+  ),
+  baud: Schema.optional(Schema.Int.annotate({ description: "Default 115200." })),
+});
+export type HardwareMonitorReadInput = typeof HardwareMonitorReadInput.Type;
+
+export const HardwareMonitorReadResult = Schema.Struct({
+  port: Schema.String,
+  /** What the board printed, without ANSI colours; the last 16 KB. */
+  text: Schema.String,
+  bytes: Schema.Int,
+  truncated: Schema.Boolean,
+  /** Set when `until` was given. */
+  matched: Schema.optional(Schema.Boolean),
+  durationMs: Schema.Int,
+});
+export type HardwareMonitorReadResult = typeof HardwareMonitorReadResult.Type;
+
+export const HardwareResetInput = Schema.Struct({ port: PortOption });
+export type HardwareResetInput = typeof HardwareResetInput.Type;
+
+export const HardwareResetResult = Schema.Struct({ port: Schema.String });
+export type HardwareResetResult = typeof HardwareResetResult.Type;
+
+export const HardwareFlashBackupMode = Schema.Literals(["auto", "always", "skip"]);
+export type HardwareFlashBackupMode = typeof HardwareFlashBackupMode.Type;
+
+export const HardwareFlashInput = Schema.Struct({
+  path: Schema.String.annotate({
+    description: "ESP-IDF project directory, relative to the workspace. Built first if needed.",
+  }),
+  port: PortOption,
+  backup: Schema.optional(
+    HardwareFlashBackupMode.annotate({
+      description:
+        "Save the whole flash before writing: auto = only the first time Kitty flashes this board (default), always, or skip.",
+    }),
+  ),
+});
+export type HardwareFlashInput = typeof HardwareFlashInput.Type;
+
+export const HardwareFlashBackup = Schema.Struct({
+  /** Absolute path of the image; restore with esptool write_flash 0 <file>. */
+  file: Schema.String,
+  /** False when an earlier backup of this board was kept instead. */
+  created: Schema.Boolean,
+});
+export type HardwareFlashBackup = typeof HardwareFlashBackup.Type;
+
+export const HardwareFlashResult = Schema.Struct({
+  ok: Schema.Boolean,
+  port: Schema.String,
+  durationMs: Schema.Int,
+  backup: Schema.optional(HardwareFlashBackup),
+  /** Build diagnostics when the project did not compile. */
+  diagnostics: Schema.Array(HardwareBuildDiagnostic),
+  logTail: Schema.String,
+});
+export type HardwareFlashResult = typeof HardwareFlashResult.Type;
+
+export const HardwareProjectFlashInput = Schema.Struct({
+  ...HardwareWorkspaceTarget,
+  path: Schema.String,
+  port: Schema.optional(Schema.String),
+});
+export type HardwareProjectFlashInput = typeof HardwareProjectFlashInput.Type;
+
+/** A streamed flash from the panel: idf.py / esptool output, then the result. */
+export const HardwareFlashEvent = Schema.Union([
+  Schema.Struct({ type: Schema.Literal("output"), text: Schema.String }),
+  Schema.Struct({ type: Schema.Literal("complete"), result: HardwareFlashResult }),
+]);
+export type HardwareFlashEvent = typeof HardwareFlashEvent.Type;
+
+export const HardwareMonitorInput = Schema.Struct({
+  port: Schema.String,
+  baud: Schema.optional(Schema.Int),
+  reset: Schema.optional(Schema.Boolean),
+  /** Changes to start a new monitor session with otherwise equal input. */
+  session: Schema.optional(Schema.Int),
+});
+export type HardwareMonitorInput = typeof HardwareMonitorInput.Type;
+
+/** The panel's serial monitor. It yields the port to a flash or an agent read. */
+export const HardwareMonitorEvent = Schema.Union([
+  Schema.Struct({ type: Schema.Literal("output"), text: Schema.String }),
+  Schema.Struct({
+    type: Schema.Literal("status"),
+    status: Schema.Literals(["open", "preempted", "closed"]),
+    detail: Schema.optional(Schema.String),
+  }),
+]);
+export type HardwareMonitorEvent = typeof HardwareMonitorEvent.Type;
+
+/** An agent asking to write to a board; the user answers in the Hardware panel. */
+export const HardwareApproval = Schema.Struct({
+  id: Schema.String,
+  kind: Schema.Literals(["flash"]),
+  threadId: Schema.optional(ThreadId),
+  project: Schema.String,
+  port: Schema.String,
+  requestedAt: Schema.String,
+});
+export type HardwareApproval = typeof HardwareApproval.Type;
+
+export const HardwareApprovalsInput = Schema.Struct({});
+export type HardwareApprovalsInput = typeof HardwareApprovalsInput.Type;
+
+export const HardwareApprovalsEvent = Schema.Struct({
+  pending: Schema.Array(HardwareApproval),
+});
+export type HardwareApprovalsEvent = typeof HardwareApprovalsEvent.Type;
+
+export const HardwareApprovalRespondInput = Schema.Struct({
+  id: Schema.String,
+  allow: Schema.Boolean,
+});
+export type HardwareApprovalRespondInput = typeof HardwareApprovalRespondInput.Type;

@@ -2,8 +2,10 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
+import * as Stream from "effect/Stream";
 
 import * as ProcessRunner from "../processRunner.ts";
 import * as HardwareService from "./HardwareService.ts";
@@ -405,5 +407,155 @@ it.effect("rejects bad option names and empty reads before touching the project"
     );
     assert.equal(noQuery.code, "invalid_argument");
     assert.equal(reconfigures.length, 0);
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+const BOARD_PORT = "/dev/cu.usbmodem1301";
+const PORT_LIST = JSON.stringify([
+  { device: "/dev/cu.Bluetooth-Incoming-Port", vid: null, pid: null, serial: null },
+  {
+    device: BOARD_PORT,
+    vid: 0x303a,
+    pid: 0x1001,
+    serial: "E8:06:90:94:EB:C0",
+    description: "USB JTAG/serial debug unit",
+  },
+]);
+const FLASH_ID = `Chip is ESP32-S3 (QFN56) (revision v0.2)
+USB mode: USB-Serial/JTAG
+MAC: e8:06:90:94:eb:c0
+Detected flash size: 4MB`;
+
+/** A fake ESP-IDF toolchain and board: pyserial, esptool and idf.py. */
+const fakeBoard =
+  (calls: Array<ReadonlyArray<string>>) => (input: ProcessRunner.ProcessRunInput) => {
+    calls.push(input.args);
+    if (input.args[0] === "-c" && input.args[1]?.includes("list_ports")) return output(PORT_LIST);
+    if (input.args.includes("flash_id")) return output(FLASH_ID);
+    if (input.args.includes("read_flash")) return output("Read 4194304 bytes");
+    if (input.args.includes("flash")) {
+      input.onStdoutChunk?.(new TextEncoder().encode("Writing at 0x00010000... (100 %)\n"));
+      return output("Hash of data verified.\nHard resetting via RTS pin...");
+    }
+    return output("");
+  };
+
+const flashProject = Effect.fn(function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const { home } = yield* espHome();
+  const directory = path.join(home, "blink");
+  yield* fs.makeDirectory(directory);
+  yield* fs.writeFileString(path.join(directory, "CMakeLists.txt"), "");
+  return { home, directory };
+});
+
+it.effect("lists boards first and names the bridge", () =>
+  Effect.gen(function* () {
+    const { home } = yield* espHome();
+    const result = yield* withRunner(home, fakeBoard([]), (service) => service.ports);
+    assert.deepStrictEqual(result.ports, [
+      {
+        device: BOARD_PORT,
+        kind: "esp-usb-jtag",
+        label: "ESP32 native USB (USB-Serial/JTAG)",
+        vid: 0x303a,
+        pid: 0x1001,
+        serialNumber: "E8:06:90:94:EB:C0",
+        description: "USB JTAG/serial debug unit",
+      },
+    ]);
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect("backs a board up the first time it flashes it, then flashes", () =>
+  Effect.gen(function* () {
+    const path = yield* Path.Path;
+    const { home, directory } = yield* flashProject();
+    const calls: Array<ReadonlyArray<string>> = [];
+    const output: Array<string> = [];
+    const first = yield* withRunner(home, fakeBoard(calls), (service) =>
+      service.flash({ path: "blink", directory }, { onOutput: (text) => output.push(text) }),
+    );
+    assert.isTrue(first.ok);
+    assert.equal(first.port, BOARD_PORT);
+    assert.isTrue(first.backup?.created);
+    assert.isTrue(
+      first.backup?.file.startsWith(path.join(home, ".kitty", "hardware-backups", "e8069094ebc0")),
+    );
+    const readFlash = calls.find((args) => args.includes("read_flash"));
+    assert.deepStrictEqual(readFlash?.slice(-3, -1), ["0", "0x400000"]);
+    const idf = calls.find((args) => args.includes("flash") && args[0] === "-c");
+    assert.deepStrictEqual(idf?.slice(-5), ["-p", BOARD_PORT, "-b", "460800", "flash"]);
+    assert.isTrue(output.some((text) => text.includes("Writing at 0x00010000")));
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect("keeps an earlier backup in auto mode and skips it on request", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const { home, directory } = yield* flashProject();
+    const backups = path.join(home, ".kitty", "hardware-backups", "e8069094ebc0");
+    yield* fs.makeDirectory(backups, { recursive: true });
+    yield* fs.writeFileString(path.join(backups, "2026-11-05-4MB.bin"), "");
+    const calls: Array<ReadonlyArray<string>> = [];
+    const again = yield* withRunner(home, fakeBoard(calls), (service) =>
+      service.flash({ path: "blink", directory }),
+    );
+    assert.deepStrictEqual(again.backup, {
+      file: path.join(backups, "2026-11-05-4MB.bin"),
+      created: false,
+    });
+    assert.isFalse(calls.some((args) => args.includes("read_flash")));
+
+    const skipped = yield* withRunner(home, fakeBoard([]), (service) =>
+      service.flash({ path: "blink", directory, backup: "skip" }),
+    );
+    assert.isUndefined(skipped.backup);
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect("an agent flash waits for the user's answer and touches nothing when denied", () =>
+  Effect.gen(function* () {
+    const { home, directory } = yield* flashProject();
+    const calls: Array<ReadonlyArray<string>> = [];
+    const denied = yield* withRunner(home, fakeBoard(calls), (service) =>
+      Effect.gen(function* () {
+        const flashing = yield* service
+          .flash({ path: "blink", directory }, { approvalFor: {} })
+          .pipe(Effect.flip, Effect.forkChild);
+        const pending = yield* service.approvals.pipe(
+          Stream.filter((list) => list.length > 0),
+          Stream.runHead,
+        );
+        const request = pending._tag === "Some" ? pending.value[0] : undefined;
+        assert.equal(request?.port, BOARD_PORT);
+        assert.equal(request?.project, "blink");
+        yield* service.respondApproval(request?.id ?? "", false);
+        return yield* Fiber.join(flashing);
+      }),
+    );
+    assert.equal(denied.code, "denied");
+    assert.isFalse(calls.some((args) => args.includes("flash") || args.includes("read_flash")));
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect("stops reading the serial log once `until` matches", () =>
+  Effect.gen(function* () {
+    const { home } = yield* espHome();
+    const result = yield* withRunner(
+      home,
+      (input) => {
+        if (input.args[1]?.includes("list_ports")) return output(PORT_LIST);
+        input.onStdoutChunk?.(new TextEncoder().encode("\u001b[0;32mI (300) main: Hello"));
+        input.onStdoutChunk?.(new TextEncoder().encode(" world!\u001b[0m\r\n"));
+        return output("");
+      },
+      (service) => service.monitorRead({ until: "Hello world", seconds: 30 }),
+    );
+    assert.equal(result.text, "I (300) main: Hello world!\n");
+    assert.isTrue(result.matched);
+    assert.equal(result.port, BOARD_PORT);
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
