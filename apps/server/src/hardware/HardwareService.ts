@@ -30,6 +30,7 @@ import {
   compareVersions,
   formatVersion,
   matchesIdfPythonEnv,
+  parseEimInstallPaths,
   parseIdfProjectName,
   parseIdfVersionCmake,
   parseKicadCliVersion,
@@ -90,7 +91,11 @@ export const make = Effect.fn("HardwareService.make")(function* () {
     return version ? Option.some({ path: root, version }) : Option.none<FoundIdf>();
   });
 
-  /** IDF_PATH, `~/esp/*` (manual installs), and `~/.espressif/<version>/esp-idf` (EIM). */
+  /**
+   * IDF_PATH, installs recorded by Espressif's installer (EIM, also used by the
+   * VS Code extension) in `~/.espressif/tools/eim_idf.json`, `~/esp/*` (manual
+   * installs), and `~/.espressif/<version>/esp-idf`.
+   */
   const findIdfInstallations = Effect.fn("HardwareService.findIdfInstallations")(function* (
     home: string,
     env: NodeJS.ProcessEnv,
@@ -98,6 +103,10 @@ export const make = Effect.fn("HardwareService.make")(function* () {
     const candidates = new Set<string>();
     const idfPath = env.IDF_PATH?.trim();
     if (idfPath) candidates.add(path.resolve(idfPath));
+    const eimRecord = yield* fs
+      .readFileString(path.join(home, ".espressif", "tools", "eim_idf.json"))
+      .pipe(Effect.orElseSucceed(() => ""));
+    for (const recorded of parseEimInstallPaths(eimRecord)) candidates.add(path.resolve(recorded));
     const espDir = path.join(home, "esp");
     for (const name of yield* readDirectory(espDir)) candidates.add(path.join(espDir, name));
     const espressifDir = path.join(home, ".espressif");

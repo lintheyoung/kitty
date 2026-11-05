@@ -4,6 +4,7 @@ import {
   classifyIdfVersion,
   classifyKicadVersion,
   matchesIdfPythonEnv,
+  parseEimInstallPaths,
   parseIdfProjectName,
   parseIdfVersionCmake,
   parseKicadCliVersion,
@@ -95,5 +96,26 @@ describe("ESP-IDF project files", () => {
   it("reads the chip target from sdkconfig", () => {
     expect(parseSdkconfigTarget('CONFIG_SOC_X=y\nCONFIG_IDF_TARGET="esp32s3"\n')).toBe("esp32s3");
     expect(parseSdkconfigTarget("")).toBe(undefined);
+  });
+});
+
+describe("parseEimInstallPaths", () => {
+  it("lists the checkouts EIM recorded", () => {
+    const record = JSON.stringify({
+      gitPath: "/usr/bin/git",
+      idfInstalled: [
+        { id: "a", name: "ESP-IDF v5.4.2", path: "/Users/u/esp/esp-idf", python: "/x/python" },
+        { id: "b", name: "ESP-IDF v5.5.5", path: "/opt/esp/v5.5/esp-idf" },
+        { id: "c" },
+      ],
+      idfSelectedId: "a",
+    });
+    expect(parseEimInstallPaths(record)).toEqual(["/Users/u/esp/esp-idf", "/opt/esp/v5.5/esp-idf"]);
+  });
+
+  it("ignores a missing or broken record", () => {
+    expect(parseEimInstallPaths("")).toEqual([]);
+    expect(parseEimInstallPaths("{not json")).toEqual([]);
+    expect(parseEimInstallPaths('{"idfInstalled": "nope"}')).toEqual([]);
   });
 });

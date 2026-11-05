@@ -77,3 +77,24 @@ export function parseIdfProjectName(cmakeLists: string): string | undefined {
 export function parseSdkconfigTarget(sdkconfig: string): string | undefined {
   return /^CONFIG_IDF_TARGET="([^"]+)"/m.exec(sdkconfig)?.[1];
 }
+
+/** ESP-IDF checkouts listed in EIM's `eim_idf.json`; anything unreadable lists none. */
+export function parseEimInstallPaths(json: string): ReadonlyArray<string> {
+  try {
+    const record: unknown = JSON.parse(json);
+    if (typeof record !== "object" || record === null || !("idfInstalled" in record)) return [];
+    const installed = record.idfInstalled;
+    if (!Array.isArray(installed)) return [];
+    return installed.flatMap((entry: unknown) =>
+      typeof entry === "object" &&
+      entry !== null &&
+      "path" in entry &&
+      typeof entry.path === "string" &&
+      entry.path.length > 0
+        ? [entry.path]
+        : [],
+    );
+  } catch {
+    return [];
+  }
+}
