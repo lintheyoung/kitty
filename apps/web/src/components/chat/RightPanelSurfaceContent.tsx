@@ -24,6 +24,7 @@ import { PullRequestDetailPanel } from "../pullRequest/PullRequestDetailPanel";
 import { PullRequestDetailGhost } from "../pullRequest/PullRequestGhosts";
 import { PullRequestsUnavailableState } from "../pullRequest/PullRequestsUnavailableState";
 import { ThreadPullRequestsPanel } from "../pullRequest/ThreadPullRequestsPanel";
+import { HardwarePanel } from "../hardware/HardwarePanel";
 
 const PreviewPanel = lazy(() =>
   import("../preview/PreviewPanel").then((module) => ({ default: module.PreviewPanel })),
@@ -179,6 +180,8 @@ export function RightPanelSurfaceContent(props: {
           onClose={() => onCloseSurface(surface)}
         />
       );
+    case "hardware":
+      return <HardwarePanel threadRef={threadRef} />;
     case "device":
       return (
         <Suspense fallback={null}>

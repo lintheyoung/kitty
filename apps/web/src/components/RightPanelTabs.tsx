@@ -36,6 +36,7 @@ import { restrictToFirstScrollableAncestor, restrictToHorizontalAxis } from "@dn
 import { horizontalListSortingStrategy, SortableContext, useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import {
+  Cpu,
   Smartphone,
   ChevronDown,
   ChevronLeft,
@@ -141,6 +142,8 @@ export interface RightPanelTabsProps {
   onAddPullRequest: () => void;
   onAddPullRequests: () => void;
   onAddDevice: () => void;
+  /** Kitty hardware panel. Absent where no thread is open. */
+  onAddHardware?: (() => void) | undefined;
   /** Absent where side chats are not offered. */
   onAddSideChat?: (() => void) | undefined;
   browserAvailable: boolean;
@@ -322,6 +325,8 @@ function RightPanelEmptyState(props: {
   onAddPullRequest: () => void;
   onAddPullRequests: () => void;
   onAddDevice: () => void;
+  /** Kitty hardware panel. Absent where no thread is open. */
+  onAddHardware?: (() => void) | undefined;
   /** Absent where side chats are not offered. */
   onAddSideChat?: (() => void) | undefined;
   browserAvailable: boolean;
@@ -394,6 +399,19 @@ function RightPanelEmptyState(props: {
       disabledReason: SURFACE_UNAVAILABLE_HINTS.device,
       onClick: props.onAddDevice,
     },
+    ...(props.onAddHardware
+      ? [
+          {
+            label: "Hardware",
+            description: "Check the ESP-IDF and KiCad toolchain and connected boards.",
+            icon: Cpu,
+            shortcut: "H",
+            available: true,
+            disabledReason: "",
+            onClick: props.onAddHardware,
+          },
+        ]
+      : []),
     ...(props.onAddSideChat
       ? [
           {
@@ -594,6 +612,8 @@ function surfaceTitle(
       return surface.title ?? surface.target?.name ?? "Device";
     case "side-chat":
       return "Side chat";
+    case "hardware":
+      return "Hardware";
     case "preview": {
       const snapshot = surface.resourceId ? sessions[surface.resourceId] : null;
       if (!snapshot || snapshot.navStatus._tag === "Idle") return "Browser";
@@ -684,6 +704,8 @@ function SurfaceIcon({
       return <PullRequestGlyph.link className="size-3 shrink-0" />;
     case "side-chat":
       return <SideChatTabIcon environmentId={environmentId} threadId={surface.threadId} />;
+    case "hardware":
+      return <Cpu className="size-3 shrink-0" />;
     case "device":
       return surface.target?.platform === "ios" ? (
         <AppleIcon className="size-3 shrink-0" />
@@ -1147,6 +1169,19 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
       disabledReason: SURFACE_DISABLED_REASONS.device,
       onClick: props.onAddDevice,
     },
+    ...(props.onAddHardware
+      ? [
+          {
+            label: "Hardware",
+            description: "Check the ESP-IDF and KiCad toolchain and connected boards.",
+            icon: Cpu,
+            shortcut: "H",
+            available: true,
+            disabledReason: "",
+            onClick: props.onAddHardware,
+          },
+        ]
+      : []),
     ...(props.onAddSideChat
       ? [
           {
@@ -1533,6 +1568,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             onAddPullRequest={props.onAddPullRequest}
             onAddPullRequests={props.onAddPullRequests}
             onAddDevice={props.onAddDevice}
+            onAddHardware={props.onAddHardware}
             onAddSideChat={props.onAddSideChat}
             browserAvailable={props.browserAvailable}
             terminalAvailable={props.terminalAvailable}
