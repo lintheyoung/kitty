@@ -4,8 +4,10 @@ import {
   classifyIdfVersion,
   classifyKicadVersion,
   matchesIdfPythonEnv,
+  parseIdfProjectName,
   parseIdfVersionCmake,
   parseKicadCliVersion,
+  parseSdkconfigTarget,
   selectSerialPorts,
 } from "./toolchainVersions.ts";
 
@@ -78,5 +80,20 @@ describe("selectSerialPorts", () => {
       "/dev/ttyACM1",
       "/dev/ttyUSB0",
     ]);
+  });
+});
+
+describe("ESP-IDF project files", () => {
+  it("reads the project name only from an ESP-IDF top-level CMakeLists", () => {
+    const idf =
+      "cmake_minimum_required(VERSION 3.16)\ninclude($ENV{IDF_PATH}/tools/cmake/project.cmake)\nidf_build_set_property(MINIMAL_BUILD ON)\nproject(hello_world)\n";
+    expect(parseIdfProjectName(idf)).toBe("hello_world");
+    expect(parseIdfProjectName("idf_component_register(SRCS main.c)\n")).toBe(undefined);
+    expect(parseIdfProjectName("project(plain_cmake)\n")).toBe(undefined);
+  });
+
+  it("reads the chip target from sdkconfig", () => {
+    expect(parseSdkconfigTarget('CONFIG_SOC_X=y\nCONFIG_IDF_TARGET="esp32s3"\n')).toBe("esp32s3");
+    expect(parseSdkconfigTarget("")).toBe(undefined);
   });
 });

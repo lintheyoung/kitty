@@ -7,6 +7,7 @@ import {
   type HardwareDoctorInput,
   type HardwareDoctorReport,
   type HardwareIdfInstallation,
+  type HardwareProject,
   type HardwareProjectCreated,
   type HardwareProjectCreateInput,
   HardwareToolError,
@@ -29,8 +30,10 @@ import {
   compareVersions,
   formatVersion,
   matchesIdfPythonEnv,
+  parseIdfProjectName,
   parseIdfVersionCmake,
   parseKicadCliVersion,
+  parseSdkconfigTarget,
   selectSerialPorts,
   SUPPORTED_IDF,
   SUPPORTED_KICAD_MAJOR,
@@ -56,6 +59,8 @@ export class HardwareService extends Context.Service<
     readonly build: (
       input: HardwareBuildInput & { readonly directory: string },
     ) => Effect.Effect<HardwareBuildResult, HardwareToolError>;
+    /** ESP-IDF projects up to three levels below `workspaceRoot`. */
+    readonly listProjects: (workspaceRoot: string) => Effect.Effect<ReadonlyArray<HardwareProject>>;
   }
 >()("t3/hardware/HardwareService") {}
 
@@ -428,7 +433,46 @@ export const make = Effect.fn("HardwareService.make")(function* () {
     } satisfies HardwareBuildResult;
   });
 
-  return HardwareService.of({ doctor, chipInfo, createProject, build });
+  const SKIPPED_DIRECTORIES = new Set([
+    "node_modules",
+    "build",
+    "managed_components",
+    "components",
+    ".git",
+    ".t3",
+  ]);
+  const listProjects = Effect.fn("HardwareService.listProjects")(function* (workspaceRoot: string) {
+    const projects: Array<HardwareProject> = [];
+    let frontier: ReadonlyArray<string> = [""];
+    for (let depth = 0; depth <= 3 && frontier.length > 0; depth++) {
+      const next: Array<string> = [];
+      for (const relative of frontier) {
+        const directory = path.join(workspaceRoot, relative);
+        const cmake = yield* fs
+          .readFileString(path.join(directory, "CMakeLists.txt"))
+          .pipe(Effect.orElseSucceed(() => ""));
+        const name = parseIdfProjectName(cmake);
+        if (name) {
+          const sdkconfig = yield* fs
+            .readFileString(path.join(directory, "sdkconfig"))
+            .pipe(Effect.orElseSucceed(() => ""));
+          const target = parseSdkconfigTarget(sdkconfig);
+          projects.push({ path: relative || ".", name, ...(target ? { target } : {}) });
+          continue;
+        }
+        for (const entry of yield* readDirectory(directory)) {
+          if (entry.startsWith(".") || SKIPPED_DIRECTORIES.has(entry)) continue;
+          const child = relative ? path.join(relative, entry) : entry;
+          const info = yield* fs.stat(path.join(workspaceRoot, child)).pipe(Effect.option);
+          if (Option.isSome(info) && info.value.type === "Directory") next.push(child);
+        }
+      }
+      frontier = next;
+    }
+    return projects.toSorted((a, b) => a.path.localeCompare(b.path));
+  });
+
+  return HardwareService.of({ doctor, chipInfo, createProject, build, listProjects });
 });
 
 export const layer = Layer.effect(HardwareService, make());

@@ -66,3 +66,14 @@ export function selectSerialPorts(
     .toSorted()
     .map((name) => `/dev/${name}`);
 }
+
+/** The `project(<name>)` of an ESP-IDF top-level CMakeLists.txt, or undefined for other CMake files. */
+export function parseIdfProjectName(cmakeLists: string): string | undefined {
+  if (!/tools\/cmake\/project\.cmake/.test(cmakeLists)) return undefined;
+  return /^\s*project\(\s*([A-Za-z0-9_.-]+)/m.exec(cmakeLists)?.[1];
+}
+
+/** `CONFIG_IDF_TARGET="esp32s3"` from a generated sdkconfig. */
+export function parseSdkconfigTarget(sdkconfig: string): string | undefined {
+  return /^CONFIG_IDF_TARGET="([^"]+)"/m.exec(sdkconfig)?.[1];
+}

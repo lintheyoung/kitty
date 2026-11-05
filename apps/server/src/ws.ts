@@ -1,4 +1,4 @@
-import { OrchestrationDispatchCommandError } from "@t3tools/contracts";
+import { HardwareToolError, OrchestrationDispatchCommandError } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Orchestrator from "./orchestration-v2/Orchestrator.ts";
@@ -192,6 +192,7 @@ import { terminalOutputStream, withTerminalOutputWindow } from "./terminal/Outpu
 import * as ServerBrowser from "./preview/ServerBrowser.ts";
 import * as DeviceService from "./device/DeviceService.ts";
 import * as HardwareService from "./hardware/HardwareService.ts";
+import { resolveInWorkspace } from "./hardware/workspacePath.ts";
 import { remoteSshDeviceHosts } from "./device/localSshDeviceHost.ts";
 import * as PreviewManager from "./preview/Manager.ts";
 import { issueAssetUrl } from "./assets/AssetAccess.ts";
@@ -1413,6 +1414,24 @@ export const layerWsRpc = (
       const pullRequestSync = yield* PullRequestSyncReactor.PullRequestSyncReactor;
       const deviceService = yield* DeviceService.DeviceService;
       const hardwareService = yield* HardwareService.HardwareService;
+      const requireHardwareWorkspace = Effect.fn("ws.requireHardwareWorkspace")(function* (target: {
+        readonly threadId: ThreadId;
+        readonly projectId: ProjectId;
+      }) {
+        const fromThread = yield* threadWorkspaceRoot(target.threadId);
+        const workspaceRoot =
+          fromThread ??
+          Option.getOrUndefined(
+            yield* projectService.getById(target.projectId).pipe(Effect.orElseSucceed(Option.none)),
+          )?.workspaceRoot;
+        if (!workspaceRoot) {
+          return yield* new HardwareToolError({
+            code: "invalid_path",
+            message: "This thread has no workspace.",
+          });
+        }
+        return workspaceRoot;
+      });
       const deviceHostContext =
         yield* Effect.context<Effect.Services<ReturnType<typeof remoteSshDeviceHosts>>>();
       const orchestrationEngine = yield* Orchestrator.OrchestratorV2;
@@ -3184,6 +3203,16 @@ export const layerWsRpc = (
         [WS_METHODS.deviceEasAccount]: (input) => deviceService.easAccount(input),
         [WS_METHODS.deviceSimlockIdentity]: (input) => deviceService.simlockIdentity(input),
         [WS_METHODS.hardwareDoctor]: (input) => hardwareService.doctor(input),
+        [WS_METHODS.hardwareProjects]: (input) =>
+          requireHardwareWorkspace(input).pipe(
+            Effect.flatMap((workspaceRoot) => hardwareService.listProjects(workspaceRoot)),
+            Effect.map((projects) => ({ projects })),
+          ),
+        [WS_METHODS.hardwareBuild]: (input) =>
+          requireHardwareWorkspace(input).pipe(
+            Effect.flatMap((workspaceRoot) => resolveInWorkspace(workspaceRoot, input.path)),
+            Effect.flatMap((directory) => hardwareService.build({ path: input.path, directory })),
+          ),
         [WS_METHODS.deviceList]: (input) =>
           input.inspectOnly && !input.updateTool
             ? deviceService.inspect

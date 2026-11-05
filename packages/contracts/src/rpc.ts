@@ -308,7 +308,15 @@ import {
   DeviceSession,
   DeviceShutdownInput,
 } from "./device.ts";
-import { HardwareDoctorInput, HardwareDoctorReport } from "./hardware.ts";
+import {
+  HardwareBuildResult,
+  HardwareDoctorInput,
+  HardwareDoctorReport,
+  HardwareProjectBuildInput,
+  HardwareProjectsInput,
+  HardwareProjectsResult,
+  HardwareToolError,
+} from "./hardware.ts";
 import {
   ServerConfigStreamEvent,
   DesktopUpdateCommitInput,
@@ -490,6 +498,8 @@ export const WS_METHODS = {
 
   // Kitty hardware
   hardwareDoctor: "hardware.doctor",
+  hardwareProjects: "hardware.projects",
+  hardwareBuild: "hardware.build",
   deviceTestHost: "device.testHost",
   deviceEasAccount: "device.easAccount",
   deviceSimlockIdentity: "device.simlockIdentity",
@@ -1688,6 +1698,18 @@ const WsHardwareDoctorRpc = Rpc.make(WS_METHODS.hardwareDoctor, {
   error: EnvironmentAuthorizationError,
 });
 
+const WsHardwareProjectsRpc = Rpc.make(WS_METHODS.hardwareProjects, {
+  payload: HardwareProjectsInput,
+  success: HardwareProjectsResult,
+  error: Schema.Union([HardwareToolError, EnvironmentAuthorizationError]),
+});
+
+const WsHardwareBuildRpc = Rpc.make(WS_METHODS.hardwareBuild, {
+  payload: HardwareProjectBuildInput,
+  success: HardwareBuildResult,
+  error: Schema.Union([HardwareToolError, EnvironmentAuthorizationError]),
+});
+
 const WsDeviceConfigureRpc = Rpc.make(WS_METHODS.deviceConfigure, {
   payload: DeviceConfigureInput,
   success: DeviceServiceState,
@@ -2182,6 +2204,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsDeviceConfigureRpc,
   WsDeviceListRpc,
   WsHardwareDoctorRpc,
+  WsHardwareProjectsRpc,
+  WsHardwareBuildRpc,
   WsDeviceTestHostRpc,
   WsDeviceEasAccountRpc,
   WsDeviceSimlockIdentityRpc,

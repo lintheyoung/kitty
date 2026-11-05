@@ -1,10 +1,11 @@
-import type { HardwareDoctorCheck, ScopedThreadRef } from "@t3tools/contracts";
+import type { HardwareDoctorCheck, ProjectId, ScopedThreadRef } from "@t3tools/contracts";
 import { RefreshCwIcon } from "lucide-react";
 
 import { hardwareDoctor } from "../../state/hardware";
 import { useEnvironmentQuery } from "../../state/query";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
+import { HardwareProjects } from "./HardwareProjects";
 
 const CHECK_LABELS: Record<HardwareDoctorCheck["id"], string> = {
   "esp-idf": "ESP-IDF",
@@ -21,7 +22,11 @@ const STATUS_BADGES = {
 } as const;
 
 /** Kitty's hardware surface. The report comes from the environment that owns the board. */
-export function HardwarePanel(props: { readonly threadRef: ScopedThreadRef }) {
+export function HardwarePanel(props: {
+  readonly threadRef: ScopedThreadRef;
+  /** Null outside a project; the projects section then stays hidden. */
+  readonly projectId: ProjectId | null;
+}) {
   const query = useEnvironmentQuery(
     hardwareDoctor({ environmentId: props.threadRef.environmentId, input: {} }),
   );
@@ -94,6 +99,9 @@ export function HardwarePanel(props: { readonly threadRef: ScopedThreadRef }) {
               </div>
             ) : null}
           </>
+        )}
+        {props.projectId === null ? null : (
+          <HardwareProjects threadRef={props.threadRef} projectId={props.projectId} />
         )}
       </div>
     </div>

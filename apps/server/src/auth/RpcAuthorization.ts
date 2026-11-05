@@ -202,6 +202,8 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.deviceSimlockIdentity]: AuthSettingsWriteScope,
   [WS_METHODS.deviceList]: AuthOrchestrationReadScope,
   [WS_METHODS.hardwareDoctor]: AuthOrchestrationReadScope,
+  [WS_METHODS.hardwareProjects]: AuthOrchestrationReadScope,
+  [WS_METHODS.hardwareBuild]: AuthOrchestrationOperateScope,
   [WS_METHODS.deviceOpen]: AuthOrchestrationOperateScope,
   [WS_METHODS.deviceClose]: AuthOrchestrationOperateScope,
   [WS_METHODS.deviceShutdown]: AuthOrchestrationOperateScope,

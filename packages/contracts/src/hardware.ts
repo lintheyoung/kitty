@@ -1,5 +1,7 @@
 import * as Schema from "effect/Schema";
 
+import { ProjectId, ThreadId } from "./baseSchemas.ts";
+
 /** Kitty hardware toolchain checks. See docs/kitty/开发计划.md. */
 export const HardwareCheckId = Schema.Literals([
   "esp-idf",
@@ -145,3 +147,31 @@ export const HardwareBuildResult = Schema.Struct({
   logTail: Schema.String,
 });
 export type HardwareBuildResult = typeof HardwareBuildResult.Type;
+
+/** An ESP-IDF project found in a thread's workspace. */
+export const HardwareProject = Schema.Struct({
+  path: Schema.String,
+  name: Schema.String,
+  target: Schema.optional(Schema.String),
+});
+export type HardwareProject = typeof HardwareProject.Type;
+
+/**
+ * The thread's worktree when the thread exists, else its project's root.
+ * A draft thread has no server record yet, so the project is what resolves.
+ */
+const HardwareWorkspaceTarget = { threadId: ThreadId, projectId: ProjectId };
+
+export const HardwareProjectsInput = Schema.Struct(HardwareWorkspaceTarget);
+export type HardwareProjectsInput = typeof HardwareProjectsInput.Type;
+
+export const HardwareProjectsResult = Schema.Struct({
+  projects: Schema.Array(HardwareProject),
+});
+export type HardwareProjectsResult = typeof HardwareProjectsResult.Type;
+
+export const HardwareProjectBuildInput = Schema.Struct({
+  ...HardwareWorkspaceTarget,
+  path: Schema.String,
+});
+export type HardwareProjectBuildInput = typeof HardwareProjectBuildInput.Type;

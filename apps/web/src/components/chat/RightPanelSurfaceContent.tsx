@@ -181,7 +181,8 @@ export function RightPanelSurfaceContent(props: {
         />
       );
     case "hardware":
-      return <HardwarePanel threadRef={threadRef} />;
+      // The active thread's project, drafts included.
+      return <HardwarePanel threadRef={threadRef} projectId={props.pullRequest.projectId} />;
     case "device":
       return (
         <Suspense fallback={null}>
