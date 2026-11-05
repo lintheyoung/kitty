@@ -21,6 +21,12 @@ import {
   HardwareSetTargetInput,
   HardwareSetTargetResult,
   HardwareToolError,
+  HardwarePinCheckInput,
+  HardwarePinCheckResult,
+  HardwarePinmapSyncInput,
+  HardwarePinmapSyncResult,
+  HardwareProjectInspectInput,
+  HardwareProjectInspectResult,
   KicadBomInput,
   KicadBomResult,
   KicadDrcInput,
@@ -270,6 +276,47 @@ const KicadFabExportTool = Tool.make("kicad_fab_export", {
   .annotate(Tool.Idempotent, true)
   .annotate(Tool.OpenWorld, false);
 
+const HardwareProjectInspectTool = Tool.make("hw_project_inspect", {
+  description:
+    "Start here in a hardware project: finds the KiCad schematic and board, the ESP-IDF firmware, and hardware/board.json, pinmap.json and components.json, with field-level errors and next steps. Returns board.json and pinmap.json when valid.",
+  parameters: HardwareProjectInspectInput,
+  success: HardwareProjectInspectResult,
+  failure: HardwareFailure,
+  dependencies: kicadDependencies,
+})
+  .annotate(Tool.Title, "Inspect hardware project")
+  .annotate(Tool.Readonly, true)
+  .annotate(Tool.Destructive, false)
+  .annotate(Tool.Idempotent, true)
+  .annotate(Tool.OpenWorld, false);
+
+const HardwarePinmapSyncTool = Tool.make("hw_pinmap_sync", {
+  description:
+    "Export hardware/pinmap.json (each MCU GPIO, its net and what else is on it) and hardware/components.json from the schematic. Keeps hand-written function/notes, sources and alternates, and reports which GPIOs changed. Run after the schematic changes.",
+  parameters: HardwarePinmapSyncInput,
+  success: HardwarePinmapSyncResult,
+  failure: HardwareFailure,
+  dependencies: kicadDependencies,
+})
+  .annotate(Tool.Title, "Export pinmap from schematic")
+  .annotate(Tool.Destructive, false)
+  .annotate(Tool.Idempotent, true)
+  .annotate(Tool.OpenWorld, false);
+
+const HardwarePinCheckTool = Tool.make("hw_pin_check", {
+  description:
+    "Check the firmware's pins against the schematic: GPIOs the firmware uses that are unconnected or not on the MCU, strapping and USB pins, and a pinmap.json that no longer matches the schematic. Run before flashing new pin assignments.",
+  parameters: HardwarePinCheckInput,
+  success: HardwarePinCheckResult,
+  failure: HardwareFailure,
+  dependencies: kicadDependencies,
+})
+  .annotate(Tool.Title, "Check firmware pins")
+  .annotate(Tool.Readonly, true)
+  .annotate(Tool.Destructive, false)
+  .annotate(Tool.Idempotent, true)
+  .annotate(Tool.OpenWorld, false);
+
 export const HardwareToolkit = Toolkit.make(
   HardwareDoctorTool,
   HardwareChipInfoTool,
@@ -287,4 +334,7 @@ export const HardwareToolkit = Toolkit.make(
   KicadNetlistTool,
   KicadBomTool,
   KicadFabExportTool,
+  HardwareProjectInspectTool,
+  HardwarePinmapSyncTool,
+  HardwarePinCheckTool,
 );

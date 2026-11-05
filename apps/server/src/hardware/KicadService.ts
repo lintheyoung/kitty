@@ -10,6 +10,16 @@ import {
   type KicadFabExportResult,
   type KicadNetlistInput,
   type KicadNetlistResult,
+  type HardwarePinCheckInput,
+  type HardwarePinCheckResult,
+  type HardwarePinmapSyncInput,
+  type HardwarePinmapSyncResult,
+  type HardwareProjectInspectInput,
+  type HardwareProjectInspectResult,
+  type KittyFileReport,
+  KittyBoard,
+  KittyComponents,
+  KittyPinmap,
 } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Context from "effect/Context";
@@ -18,6 +28,8 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as Schema from "effect/Schema";
+import * as SchemaIssue from "effect/SchemaIssue";
 
 import * as ProcessRunner from "../processRunner.ts";
 import { logTail } from "./buildOutput.ts";
@@ -28,7 +40,16 @@ import {
   parseErcReport,
   parseNetlist,
 } from "./kicadReports.ts";
-import { parseKicadCliVersion } from "./toolchainVersions.ts";
+import {
+  buildComponents,
+  buildPinmap,
+  checkPins,
+  chipFamily,
+  detectMcu,
+  scanFirmwarePins,
+  schematicPins,
+} from "./projectModel.ts";
+import { parseIdfProjectName, parseKicadCliVersion } from "./toolchainVersions.ts";
 import { resolveInWorkspace } from "./workspacePath.ts";
 
 type InWorkspace<A> = A & { readonly workspaceRoot: string };
@@ -55,6 +76,18 @@ export class KicadService extends Context.Service<
     readonly fabExport: (
       input: InWorkspace<KicadFabExportInput>,
     ) => Effect.Effect<KicadFabExportResult, HardwareToolError>;
+    /** What the hardware project has (schematic, board, firmware, config files) and what is wrong. */
+    readonly projectInspect: (
+      input: InWorkspace<HardwareProjectInspectInput>,
+    ) => Effect.Effect<HardwareProjectInspectResult, HardwareToolError>;
+    /** Writes hardware/pinmap.json and hardware/components.json from the schematic. */
+    readonly pinmapSync: (
+      input: InWorkspace<HardwarePinmapSyncInput>,
+    ) => Effect.Effect<HardwarePinmapSyncResult, HardwareToolError>;
+    /** Checks firmware pins and pinmap.json against the schematic. */
+    readonly pinCheck: (
+      input: InWorkspace<HardwarePinCheckInput>,
+    ) => Effect.Effect<HardwarePinCheckResult, HardwareToolError>;
   }
 >()("t3/hardware/KicadService") {}
 
@@ -417,7 +450,275 @@ export const make = Effect.fn("KicadService.make")(function* () {
     } satisfies KicadFabExportResult;
   });
 
-  return KicadService.of({ erc, drc, netlist, bom, fabExport });
+  const SKIP_DIRECTORIES = new Set(["node_modules", "build", "managed_components", ".git", "fab"]);
+
+  /** Files under `root` (relative paths) up to `depth` levels, skipping build output. */
+  const walk = Effect.fn("KicadService.walk")(function* (root: string, depth: number) {
+    const files: Array<string> = [];
+    let frontier: ReadonlyArray<string> = [""];
+    for (let level = 0; level <= depth && frontier.length > 0; level++) {
+      const next: Array<string> = [];
+      for (const relative of frontier) {
+        for (const entry of yield* listFiles(path.join(root, relative))) {
+          if (entry.startsWith(".") || SKIP_DIRECTORIES.has(entry)) continue;
+          const child = relative ? path.join(relative, entry) : entry;
+          const info = yield* fs.stat(path.join(root, child)).pipe(Effect.option);
+          if (Option.isNone(info)) continue;
+          if (info.value.type === "Directory") next.push(child);
+          else files.push(child);
+        }
+      }
+      frontier = next;
+    }
+    return files.toSorted();
+  });
+
+  const formatIssues = SchemaIssue.makeFormatterStandardSchemaV1();
+
+  /** A project-model JSON file: absent, invalid (with field-level errors), or decoded. */
+  const readModel = Effect.fn("KicadService.readModel")(function* <A>(
+    schema: Schema.Codec<A, unknown>,
+    file: string,
+    display: string,
+  ) {
+    const text = yield* fs.readFileString(file).pipe(Effect.option);
+    if (Option.isNone(text)) {
+      const report: KittyFileReport = { file: display, present: false, errors: [] };
+      return { report, value: undefined };
+    }
+    const decoded = Schema.decodeExit(Schema.fromJsonString(schema))(text.value, {
+      errors: "all",
+    });
+    if (decoded._tag === "Success") {
+      const report: KittyFileReport = { file: display, present: true, errors: [] };
+      return { report, value: decoded.value };
+    }
+    const errors = decoded.cause.reasons.flatMap((reason) =>
+      reason._tag === "Fail" && Schema.isSchemaError(reason.error)
+        ? formatIssues(reason.error.issue).issues.map((issue) => {
+            const where = (issue.path ?? [])
+              .map((key) => (typeof key === "number" ? `[${key}]` : `.${String(key)}`))
+              .join("")
+              .replace(/^\./, "");
+            return `${where || "(file)"}: ${issue.message}`;
+          })
+        : ["Invalid file"],
+    );
+    const report: KittyFileReport = { file: display, present: true, errors };
+    return { report, value: undefined };
+  });
+
+  interface ProjectLayout {
+    readonly root: string;
+    readonly rootRelative: string;
+    readonly schematic?: string | undefined;
+    readonly board?: string | undefined;
+    readonly firmware: ReadonlyArray<string>;
+  }
+
+  /** Where the schematic, board and ESP-IDF projects of a hardware project are. */
+  const layout = Effect.fn("KicadService.layout")(function* (
+    workspaceRoot: string,
+    requested: string | undefined,
+  ) {
+    const root = yield* confine(workspaceRoot, requested ?? ".");
+    const info = yield* fs.stat(root).pipe(Effect.option);
+    if (Option.isNone(info) || info.value.type !== "Directory") {
+      return yield* failure("invalid_path", `${requested ?? "."} is not a directory.`);
+    }
+    const files = yield* walk(root, 4);
+    const pick = (extension: string) => {
+      const matches = files.filter((file) => file.endsWith(extension));
+      const pro = files.find((file) => file.endsWith(".kicad_pro"));
+      const stem = pro ? pro.slice(0, -".kicad_pro".length) : undefined;
+      return (
+        (stem && matches.find((file) => file === `${stem}${extension}`)) ??
+        matches.find((file) => file.startsWith("hardware/")) ??
+        matches[0]
+      );
+    };
+    const firmware: Array<string> = [];
+    for (const file of files.filter((candidate) => candidate.endsWith("CMakeLists.txt"))) {
+      const text = yield* fs
+        .readFileString(path.join(root, file))
+        .pipe(Effect.orElseSucceed(() => ""));
+      if (parseIdfProjectName(text)) firmware.push(path.dirname(file));
+    }
+    const rel = (file: string | undefined) =>
+      file ? path.relative(workspaceRoot, path.join(root, file)) : undefined;
+    return {
+      root,
+      rootRelative: path.relative(workspaceRoot, root) || ".",
+      schematic: rel(pick(".kicad_sch")),
+      board: rel(pick(".kicad_pcb")),
+      firmware: firmware.map((dir) => rel(dir) ?? dir),
+    } satisfies ProjectLayout;
+  });
+
+  const MODEL_FILES = {
+    board: "hardware/board.json",
+    pinmap: "hardware/pinmap.json",
+    components: "hardware/components.json",
+  } as const;
+
+  const projectInspect = Effect.fn("KicadService.projectInspect")(function* (
+    input: InWorkspace<HardwareProjectInspectInput>,
+  ) {
+    const found = yield* layout(input.workspaceRoot, input.path);
+    const display = (file: string) => path.join(found.rootRelative, file);
+    const board = yield* readModel(
+      KittyBoard,
+      path.join(found.root, MODEL_FILES.board),
+      display(MODEL_FILES.board),
+    );
+    const pinmap = yield* readModel(
+      KittyPinmap,
+      path.join(found.root, MODEL_FILES.pinmap),
+      display(MODEL_FILES.pinmap),
+    );
+    const components = yield* readModel(
+      KittyComponents,
+      path.join(found.root, MODEL_FILES.components),
+      display(MODEL_FILES.components),
+    );
+    const next: Array<string> = [];
+    if (!found.schematic)
+      next.push("No KiCad schematic found; put the KiCad project under hardware/.");
+    if (found.schematic && (!pinmap.report.present || !components.report.present)) {
+      next.push("Run hw_pinmap_sync to export pinmap.json and components.json from the schematic.");
+    }
+    if (!board.report.present) {
+      next.push(
+        "Write hardware/board.json (board name, MCU, buses, peripherals) to describe the board.",
+      );
+    }
+    for (const report of [board.report, pinmap.report, components.report]) {
+      if (report.errors.length > 0) next.push(`Fix ${report.file}: ${report.errors[0]}`);
+    }
+    if (found.firmware.length === 0)
+      next.push("No ESP-IDF project yet; create one with hw_project_create.");
+    if (found.schematic && found.firmware.length > 0) {
+      next.push("Run hw_pin_check after changing pins in the firmware or the schematic.");
+    }
+    return {
+      root: found.rootRelative,
+      ...(found.schematic ? { schematic: found.schematic } : {}),
+      ...(found.board ? { board: found.board } : {}),
+      firmware: found.firmware,
+      files: [board.report, pinmap.report, components.report],
+      ...(board.value ? { board_config: board.value } : {}),
+      ...(pinmap.value ? { pinmap: pinmap.value } : {}),
+      next_steps: next,
+    } satisfies HardwareProjectInspectResult;
+  });
+
+  /** The schematic, its netlist and its MCU. */
+  const schematicModel = Effect.fn("KicadService.schematicModel")(function* (
+    workspaceRoot: string,
+    found: ProjectLayout,
+    mcuRef: string | undefined,
+  ) {
+    if (!found.schematic) {
+      return yield* failure("invalid_path", `No KiCad schematic under ${found.rootRelative}.`);
+    }
+    const { relative, netlist: parsed } = yield* readNetlist(workspaceRoot, found.schematic);
+    const wanted = mcuRef?.trim().toLowerCase();
+    const mcu = wanted
+      ? parsed.components.find((component) => component.ref.toLowerCase() === wanted)
+      : detectMcu(parsed.components);
+    if (!mcu) {
+      return yield* failure(
+        "invalid_argument",
+        wanted
+          ? `No component ${mcuRef} in ${relative}.`
+          : `No ESP32 part in ${relative}. Pass mcu with the reference of the MCU or module.`,
+      );
+    }
+    return { relative, netlist: parsed, mcu, pins: schematicPins(parsed, mcu) };
+  });
+
+  const writeJson = (file: string, value: unknown) =>
+    fs.makeDirectory(path.dirname(file), { recursive: true }).pipe(
+      Effect.andThen(fs.writeFileString(file, `${JSON.stringify(value, null, 2)}\n`)),
+      Effect.mapError((cause) =>
+        failure("command_failed", `Could not write ${file}: ${cause.message}`),
+      ),
+    );
+
+  const pinmapSync = Effect.fn("KicadService.pinmapSync")(function* (
+    input: InWorkspace<HardwarePinmapSyncInput>,
+  ) {
+    const found = yield* layout(input.workspaceRoot, input.path);
+    const model = yield* schematicModel(input.workspaceRoot, found, input.mcu);
+    const pinmapFile = path.join(found.root, MODEL_FILES.pinmap);
+    const componentsFile = path.join(found.root, MODEL_FILES.components);
+    // Hand-written notes survive a sync; an invalid file is replaced rather than merged.
+    const previousPinmap = (yield* readModel(KittyPinmap, pinmapFile, MODEL_FILES.pinmap)).value;
+    const previousComponents = (yield* readModel(
+      KittyComponents,
+      componentsFile,
+      MODEL_FILES.components,
+    )).value;
+    const schematic = path.relative(found.root, path.join(input.workspaceRoot, model.relative));
+    const { pinmap, changes } = buildPinmap(model.mcu, model.pins, schematic, previousPinmap);
+    yield* writeJson(pinmapFile, pinmap);
+    yield* writeJson(
+      componentsFile,
+      buildComponents(model.netlist.components, schematic, previousComponents),
+    );
+    return {
+      pinmap: path.relative(input.workspaceRoot, pinmapFile),
+      components: path.relative(input.workspaceRoot, componentsFile),
+      mcu: pinmap.mcu,
+      gpios: pinmap.pins.length,
+      connected: pinmap.pins.filter((pin) => pin.connected).length,
+      changes,
+    } satisfies HardwarePinmapSyncResult;
+  });
+
+  const FIRMWARE_SOURCE = /\.(c|cc|cpp|h|hpp)$|(^|\/)sdkconfig(\.defaults)?$/;
+
+  const pinCheck = Effect.fn("KicadService.pinCheck")(function* (
+    input: InWorkspace<HardwarePinCheckInput>,
+  ) {
+    const found = yield* layout(input.workspaceRoot, input.path);
+    const pinmapFile = path.join(found.root, MODEL_FILES.pinmap);
+    const pinmap = (yield* readModel(KittyPinmap, pinmapFile, MODEL_FILES.pinmap)).value;
+    const model = yield* schematicModel(input.workspaceRoot, found, pinmap?.mcu.ref);
+    const sources: Array<{ path: string; text: string }> = [];
+    for (const firmware of found.firmware) {
+      const directory = path.join(input.workspaceRoot, firmware);
+      for (const file of yield* walk(directory, 4)) {
+        if (!FIRMWARE_SOURCE.test(file)) continue;
+        const text = yield* fs
+          .readFileString(path.join(directory, file))
+          .pipe(Effect.orElseSucceed(() => ""));
+        sources.push({ path: path.join(firmware, file), text });
+      }
+    }
+    const { issues, firmware } = checkPins({
+      family: chipFamily(`${model.mcu.value} ${model.mcu.footprint ?? ""}`),
+      schematic: model.pins,
+      pinmap,
+      firmware: scanFirmwarePins(sources),
+    });
+    return {
+      ok: issues.every((issue) => issue.severity !== "error"),
+      issues,
+      firmware_pins: firmware,
+    } satisfies HardwarePinCheckResult;
+  });
+
+  return KicadService.of({
+    erc,
+    drc,
+    netlist,
+    bom,
+    fabExport,
+    projectInspect,
+    pinmapSync,
+    pinCheck,
+  });
 });
 
 export const layer = Layer.effect(KicadService, make());

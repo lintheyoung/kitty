@@ -185,3 +185,200 @@ export const KicadFabExportResult = Schema.Struct({
   zip: Schema.optional(Schema.String),
 });
 export type KicadFabExportResult = typeof KicadFabExportResult.Type;
+
+/*
+ * Kitty hardware project model (PRD §6): files under `hardware/` that tell an
+ * agent what the board is. The schematic is the source of truth; these files
+ * are exported from it and checked against it.
+ */
+
+export const KITTY_PROJECT_SCHEMA_VERSION = "0.1";
+
+export const KittyPin = Schema.Struct({
+  gpio: Schema.Int,
+  /** Module/package pin number in the schematic symbol. */
+  pin: Schema.String,
+  pin_name: Schema.String,
+  net: Schema.String,
+  /** False when the schematic leaves the pin unconnected. */
+  connected: Schema.Boolean,
+  /** Other pins on the net, e.g. `D1.2`. */
+  peers: Schema.Array(Schema.String),
+  /** Hand-written: what the pin is for, e.g. "status LED". Kept across syncs. */
+  function: Schema.optional(Schema.String),
+  /** Hand-written electrical notes, e.g. "active low", "max 20 mA". Kept across syncs. */
+  notes: Schema.optional(Schema.String),
+});
+export type KittyPin = typeof KittyPin.Type;
+
+export const KittyPinmap = Schema.Struct({
+  schema_version: Schema.Literal(KITTY_PROJECT_SCHEMA_VERSION),
+  mcu: Schema.Struct({ ref: Schema.String, part: Schema.String }),
+  source: Schema.Struct({ schematic: Schema.String }),
+  pins: Schema.Array(KittyPin),
+});
+export type KittyPinmap = typeof KittyPinmap.Type;
+
+export const KittyComponentSource = Schema.Struct({
+  supplier: Schema.String,
+  part_number: Schema.String,
+  url: Schema.optional(Schema.String),
+});
+export type KittyComponentSource = typeof KittyComponentSource.Type;
+
+export const KittyComponentEntry = Schema.Struct({
+  refs: Schema.Array(Schema.String),
+  value: Schema.String,
+  footprint: Schema.optional(Schema.String),
+  manufacturer: Schema.optional(Schema.String),
+  mpn: Schema.optional(Schema.String),
+  datasheet: Schema.optional(Schema.String),
+  /** Where to buy it: from the schematic's LCSC field, plus hand-added sources. */
+  sources: Schema.Array(KittyComponentSource),
+  /** Hand-written alternatives, e.g. other MPNs. Kept across syncs. */
+  alternates: Schema.optional(Schema.Array(Schema.String)),
+  dnp: Schema.Boolean,
+});
+export type KittyComponentEntry = typeof KittyComponentEntry.Type;
+
+export const KittyComponents = Schema.Struct({
+  schema_version: Schema.Literal(KITTY_PROJECT_SCHEMA_VERSION),
+  source: Schema.Struct({ schematic: Schema.String }),
+  components: Schema.Array(KittyComponentEntry),
+});
+export type KittyComponents = typeof KittyComponents.Type;
+
+export const KittyBoard = Schema.Struct({
+  schema_version: Schema.Literal(KITTY_PROJECT_SCHEMA_VERSION),
+  board_id: Schema.String,
+  name: Schema.String,
+  mcu: Schema.Struct({ vendor: Schema.String, model: Schema.String }),
+  interfaces: Schema.optional(
+    Schema.Struct({
+      i2c: Schema.optional(
+        Schema.Array(Schema.Struct({ name: Schema.String, sda: Schema.Int, scl: Schema.Int })),
+      ),
+      uart: Schema.optional(
+        Schema.Array(Schema.Struct({ name: Schema.String, tx: Schema.Int, rx: Schema.Int })),
+      ),
+      spi: Schema.optional(
+        Schema.Array(
+          Schema.Struct({
+            name: Schema.String,
+            sclk: Schema.Int,
+            mosi: Schema.optional(Schema.Int),
+            miso: Schema.optional(Schema.Int),
+            cs: Schema.optional(Schema.Array(Schema.Int)),
+          }),
+        ),
+      ),
+    }),
+  ),
+  peripherals: Schema.optional(
+    Schema.Array(
+      Schema.Struct({
+        name: Schema.String,
+        type: Schema.String,
+        interface: Schema.optional(Schema.String),
+        address: Schema.optional(Schema.String),
+        part: Schema.optional(Schema.String),
+        test: Schema.optional(Schema.String),
+      }),
+    ),
+  ),
+});
+export type KittyBoard = typeof KittyBoard.Type;
+
+const ProjectRoot = Schema.optional(
+  Schema.String.annotate({
+    description:
+      "Hardware project root (with hardware/ and firmware/), relative to the workspace. Default the workspace root.",
+  }),
+);
+
+export const KittyFileReport = Schema.Struct({
+  file: Schema.String,
+  present: Schema.Boolean,
+  /** Field-level problems, e.g. `pins[3].gpio: Expected an integer`. */
+  errors: Schema.Array(Schema.String),
+});
+export type KittyFileReport = typeof KittyFileReport.Type;
+
+export const HardwareProjectInspectInput = Schema.Struct({ path: ProjectRoot });
+export type HardwareProjectInspectInput = typeof HardwareProjectInspectInput.Type;
+
+export const HardwareProjectInspectResult = Schema.Struct({
+  root: Schema.String,
+  schematic: Schema.optional(Schema.String),
+  board: Schema.optional(Schema.String),
+  firmware: Schema.Array(Schema.String),
+  files: Schema.Array(KittyFileReport),
+  board_config: Schema.optional(KittyBoard),
+  pinmap: Schema.optional(KittyPinmap),
+  next_steps: Schema.Array(Schema.String),
+});
+export type HardwareProjectInspectResult = typeof HardwareProjectInspectResult.Type;
+
+export const HardwarePinmapSyncInput = Schema.Struct({
+  path: ProjectRoot,
+  mcu: Schema.optional(
+    Schema.String.annotate({
+      description: "Reference of the MCU or module, e.g. U1. Default: the ESP32 part.",
+    }),
+  ),
+});
+export type HardwarePinmapSyncInput = typeof HardwarePinmapSyncInput.Type;
+
+export const HardwarePinChange = Schema.Struct({
+  gpio: Schema.Int,
+  change: Schema.Literals(["added", "removed", "net_changed"]),
+  before: Schema.optional(Schema.String),
+  after: Schema.optional(Schema.String),
+});
+export type HardwarePinChange = typeof HardwarePinChange.Type;
+
+export const HardwarePinmapSyncResult = Schema.Struct({
+  pinmap: Schema.String,
+  components: Schema.String,
+  mcu: Schema.Struct({ ref: Schema.String, part: Schema.String }),
+  gpios: Schema.Int,
+  connected: Schema.Int,
+  changes: Schema.Array(HardwarePinChange),
+});
+export type HardwarePinmapSyncResult = typeof HardwarePinmapSyncResult.Type;
+
+export const HardwarePinCheckInput = Schema.Struct({ path: ProjectRoot });
+export type HardwarePinCheckInput = typeof HardwarePinCheckInput.Type;
+
+export const HardwarePinIssue = Schema.Struct({
+  severity: Schema.Literals(["error", "warning"]),
+  kind: Schema.Literals([
+    "pinmap_stale",
+    "firmware_pin_unconnected",
+    "firmware_pin_unknown",
+    "strapping_pin",
+    "usb_pin",
+    "pin_conflict",
+  ]),
+  gpio: Schema.optional(Schema.Int),
+  message: Schema.String,
+  /** Firmware location, e.g. `firmware/main/main.c:12`. */
+  at: Schema.optional(Schema.String),
+});
+export type HardwarePinIssue = typeof HardwarePinIssue.Type;
+
+export const HardwareFirmwarePin = Schema.Struct({
+  gpio: Schema.Int,
+  name: Schema.String,
+  at: Schema.String,
+  net: Schema.optional(Schema.String),
+});
+export type HardwareFirmwarePin = typeof HardwareFirmwarePin.Type;
+
+export const HardwarePinCheckResult = Schema.Struct({
+  ok: Schema.Boolean,
+  issues: Schema.Array(HardwarePinIssue),
+  /** GPIOs the firmware names, and the schematic net each is on. */
+  firmware_pins: Schema.Array(HardwareFirmwarePin),
+});
+export type HardwarePinCheckResult = typeof HardwarePinCheckResult.Type;

@@ -134,4 +134,22 @@ export const layer = McpToolAccess.toLayer(HardwareToolkit, {
       return yield* kicad.fabExport({ ...input, workspaceRoot: yield* callerWorkspaceRoot() });
     }),
   ),
+  hw_project_inspect: McpToolAccess.actsAsCaller((input) =>
+    Effect.gen(function* () {
+      const kicad = yield* KicadService.KicadService;
+      return yield* kicad.projectInspect({ ...input, workspaceRoot: yield* callerWorkspaceRoot() });
+    }),
+  ),
+  hw_pinmap_sync: McpToolAccess.actsAsCaller((input) =>
+    Effect.gen(function* () {
+      const kicad = yield* KicadService.KicadService;
+      return yield* kicad.pinmapSync({ ...input, workspaceRoot: yield* callerWorkspaceRoot() });
+    }),
+  ),
+  hw_pin_check: McpToolAccess.actsAsCaller((input) =>
+    Effect.gen(function* () {
+      const kicad = yield* KicadService.KicadService;
+      return yield* kicad.pinCheck({ ...input, workspaceRoot: yield* callerWorkspaceRoot() });
+    }),
+  ),
 });
