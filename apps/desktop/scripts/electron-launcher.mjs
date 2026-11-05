@@ -13,11 +13,12 @@ const repoRoot = NodePath.resolve(desktopDir, "..", "..");
 const devBundleIdSuffix = NodePath.basename(repoRoot)
   .toLowerCase()
   .replaceAll(/[^a-z0-9]+/g, "");
-const APP_DISPLAY_NAME = isDevelopment ? "T3 Code (Dev)" : "T3 Code (Beta)";
+// Mirrors packages/shared/src/kittyBrand.ts (this script runs without TypeScript).
+const APP_DISPLAY_NAME = isDevelopment ? "Kitty (Dev)" : "Kitty (Beta)";
 const APP_BUNDLE_ID = isDevelopment
-  ? `com.t3tools.t3code.dev.${devBundleIdSuffix || "local"}`
-  : "com.t3tools.t3code";
-const APP_PROTOCOL_SCHEMES = isDevelopment ? ["t3code-dev"] : ["t3code"];
+  ? `gg.pest.kitty.dev.${devBundleIdSuffix || "local"}`
+  : "gg.pest.kitty";
+const APP_PROTOCOL_SCHEMES = isDevelopment ? ["kitty-dev"] : ["kitty"];
 const LAUNCHER_VERSION = 20;
 const developmentMacIconPngPath = NodePath.join(
   repoRoot,

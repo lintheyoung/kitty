@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { KITTY_HOME_DIRNAME } from "@t3tools/shared/kittyBrand";
 import * as NodeOS from "node:os";
 
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
@@ -60,7 +61,7 @@ export function isProxiableBindHost(host: string): boolean {
 }
 
 export const DEFAULT_T3_HOME = Effect.map(Effect.service(Path.Path), (path) =>
-  path.join(NodeOS.homedir(), ".t3"),
+  path.join(NodeOS.homedir(), KITTY_HOME_DIRNAME),
 );
 
 const MODE_ARGS = {

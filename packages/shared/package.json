@@ -3,6 +3,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./kittyBrand": {
+      "types": "./src/kittyBrand.ts",
+      "import": "./src/kittyBrand.ts"
+    },
     "./changedFileKind": {
       "types": "./src/changedFileKind.ts",
       "import": "./src/changedFileKind.ts"
