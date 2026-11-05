@@ -1,10 +1,18 @@
-import type {
-  HardwareDoctorCheck,
-  HardwareDoctorInput,
-  HardwareDoctorReport,
-  HardwareIdfInstallation,
+import {
+  type HardwareBuildInput,
+  type HardwareBuildResult,
+  type HardwareChipInfo,
+  type HardwareChipInfoInput,
+  type HardwareDoctorCheck,
+  type HardwareDoctorInput,
+  type HardwareDoctorReport,
+  type HardwareIdfInstallation,
+  type HardwareProjectCreated,
+  type HardwareProjectCreateInput,
+  HardwareToolError,
 } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -13,6 +21,8 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 
 import * as ProcessRunner from "../processRunner.ts";
+import { logTail, parseAppBinarySize, parseBuildDiagnostics } from "./buildOutput.ts";
+import { parseEsptoolChipInfo } from "./esptoolOutput.ts";
 import {
   classifyIdfVersion,
   classifyKicadVersion,
@@ -35,6 +45,17 @@ export class HardwareService extends Context.Service<
   HardwareService,
   {
     readonly doctor: (input: HardwareDoctorInput) => Effect.Effect<HardwareDoctorReport>;
+    /** Resets the board: esptool enters the bootloader to read the chip. */
+    readonly chipInfo: (
+      input: HardwareChipInfoInput,
+    ) => Effect.Effect<HardwareChipInfo, HardwareToolError>;
+    /** `directory` is absolute; callers resolve and confine it first. */
+    readonly createProject: (
+      input: HardwareProjectCreateInput & { readonly directory: string },
+    ) => Effect.Effect<HardwareProjectCreated, HardwareToolError>;
+    readonly build: (
+      input: HardwareBuildInput & { readonly directory: string },
+    ) => Effect.Effect<HardwareBuildResult, HardwareToolError>;
   }
 >()("t3/hardware/HardwareService") {}
 
@@ -204,24 +225,32 @@ export const make = Effect.fn("HardwareService.make")(function* () {
     } satisfies HardwareDoctorCheck;
   });
 
-  const doctor = Effect.fn("HardwareService.doctor")(function* (input: HardwareDoctorInput) {
+  /** The ESP-IDF, venv and boards every operation works with. */
+  const resolveToolchain = Effect.fn("HardwareService.resolveToolchain")(function* (
+    idfPath?: string,
+  ) {
     const home = yield* HostProcess.HomeDirectory;
     const env = yield* HostProcess.Environment;
     const platform = yield* HostProcess.Platform;
-
     const found = (yield* findIdfInstallations(home, env)).toSorted((a, b) =>
       compareVersions(b.version, a.version),
     );
-    const requested = input.idfPath?.trim();
+    const requested = idfPath?.trim();
     const fromEnv = env.IDF_PATH?.trim();
     const selected = requested
       ? Option.getOrUndefined(yield* readIdf(path.resolve(requested)))
       : ((fromEnv ? found.find((idf) => idf.path === path.resolve(fromEnv)) : undefined) ??
         found.find((idf) => classifyIdfVersion(idf.version) === "ok") ??
         found[0]);
-
     const { python, bin } = yield* checkPythonEnv(home, selected);
     const serialPorts = selectSerialPorts(yield* readDirectory("/dev"), platform);
+    return { env, platform, found, selected, python, bin, serialPorts };
+  });
+
+  const doctor = Effect.fn("HardwareService.doctor")(function* (input: HardwareDoctorInput) {
+    const { env, platform, found, selected, python, bin, serialPorts } = yield* resolveToolchain(
+      input.idfPath,
+    );
     const checks: ReadonlyArray<HardwareDoctorCheck> = [
       checkIdf(selected, found.length),
       python,
@@ -254,7 +283,152 @@ export const make = Effect.fn("HardwareService.make")(function* () {
     } satisfies HardwareDoctorReport;
   });
 
-  return HardwareService.of({ doctor });
+  const failure = (code: HardwareToolError["code"], message: string) =>
+    new HardwareToolError({ code, message });
+
+  const requireIdf = Effect.fn("HardwareService.requireIdf")(function* () {
+    const toolchain = yield* resolveToolchain();
+    if (!toolchain.selected || !toolchain.bin) {
+      return yield* failure(
+        "toolchain_missing",
+        "ESP-IDF or its Python environment is missing. Run hw_doctor for details.",
+      );
+    }
+    return { ...toolchain, idf: toolchain.selected, bin: toolchain.bin };
+  });
+
+  /** Runs `idf.py` inside ESP-IDF's own environment, as a terminal after export.sh would. */
+  const runIdf = (
+    idf: FoundIdf,
+    env: NodeJS.ProcessEnv,
+    cwd: string,
+    args: ReadonlyArray<string>,
+    timeout: ProcessRunner.ProcessRunInput["timeout"],
+  ) =>
+    processRunner
+      .run({
+        command: "/bin/bash",
+        args: [
+          "-c",
+          '. "$IDF_PATH/export.sh" >/dev/null 2>&1 && exec idf.py "$@"',
+          "idf.py",
+          ...args,
+        ],
+        cwd,
+        env: { ...env, IDF_PATH: idf.path },
+        timeout,
+        outputMode: "truncate",
+        timeoutBehavior: "timedOutResult",
+      })
+      .pipe(
+        Effect.mapError((cause) =>
+          failure("command_failed", `idf.py ${args.join(" ")} could not run: ${cause.message}`),
+        ),
+      );
+
+  const chipInfo = Effect.fn("HardwareService.chipInfo")(function* (input: HardwareChipInfoInput) {
+    const { bin, serialPorts } = yield* requireIdf();
+    const port = input.port?.trim() || serialPorts[0];
+    if (!port) return yield* failure("no_board", "No board is connected. Run hw_doctor.");
+    if (!input.port && serialPorts.length > 1) {
+      return yield* failure(
+        "board_ambiguous",
+        `Several boards are connected (${serialPorts.join(", ")}). Pass port.`,
+      );
+    }
+    const result = yield* processRunner
+      .run({
+        command: path.join(bin, "python"),
+        args: ["-m", "esptool", "--port", port, "flash_id"],
+        timeout: "45 seconds",
+        timeoutBehavior: "timedOutResult",
+      })
+      .pipe(Effect.mapError((cause) => failure("command_failed", cause.message)));
+    const info = parseEsptoolChipInfo(result.stdout, port);
+    if (!info) {
+      return yield* failure(
+        "command_failed",
+        `esptool could not read the chip on ${port}. ${logTail(`${result.stdout}\n${result.stderr}`, 6)}`,
+      );
+    }
+    return info;
+  });
+
+  const createProject = Effect.fn("HardwareService.createProject")(function* (
+    input: HardwareProjectCreateInput & { readonly directory: string },
+  ) {
+    const { idf, env } = yield* requireIdf();
+    const template = input.template ?? "hello_world";
+    const target = input.target ?? "esp32s3";
+    if (yield* exists(input.directory)) {
+      return yield* failure("already_exists", `${input.path} already exists.`);
+    }
+    const source = path.join(idf.path, "examples", "get-started", template);
+    const fail = (message: string) => (cause: { readonly message: string }) =>
+      failure("command_failed", `${message}: ${cause.message}`);
+    yield* fs
+      .copy(source, input.directory)
+      .pipe(Effect.mapError(fail(`Could not copy the ${template} template`)));
+    // Example test harnesses are noise in a new project.
+    for (const extra of ["pytest_hello_world.py", "pytest_blink.py"]) {
+      yield* fs.remove(path.join(input.directory, extra)).pipe(Effect.ignore);
+    }
+    if (input.flashSize) {
+      const defaults = path.join(input.directory, "sdkconfig.defaults");
+      const previous = yield* fs.readFileString(defaults).pipe(Effect.orElseSucceed(() => ""));
+      yield* fs
+        .writeFileString(
+          defaults,
+          `${previous}${previous && !previous.endsWith("\n") ? "\n" : ""}CONFIG_ESPTOOLPY_FLASHSIZE_${input.flashSize}=y\n`,
+        )
+        .pipe(Effect.mapError(fail("Could not write sdkconfig.defaults")));
+    }
+    const setTarget = yield* runIdf(idf, env, input.directory, ["set-target", target], "5 minutes");
+    if (setTarget.code !== 0 || setTarget.timedOut) {
+      return yield* failure(
+        "command_failed",
+        `idf.py set-target ${target} failed.\n${logTail(`${setTarget.stdout}\n${setTarget.stderr}`, 20)}`,
+      );
+    }
+    const files = (yield* fs
+      .readDirectory(input.directory, { recursive: true })
+      .pipe(Effect.orElseSucceed((): ReadonlyArray<string> => [])))
+      .filter((file) => !file.startsWith("build") && !file.startsWith("managed_components"))
+      .toSorted();
+    return {
+      path: input.path,
+      template,
+      target,
+      ...(input.flashSize ? { flashSize: input.flashSize } : {}),
+      files,
+    } satisfies HardwareProjectCreated;
+  });
+
+  const build = Effect.fn("HardwareService.build")(function* (
+    input: HardwareBuildInput & { readonly directory: string },
+  ) {
+    const { idf, env } = yield* requireIdf();
+    if (!(yield* exists(path.join(input.directory, "CMakeLists.txt")))) {
+      return yield* failure(
+        "invalid_path",
+        `${input.path} is not an ESP-IDF project (no CMakeLists.txt).`,
+      );
+    }
+    const started = yield* Clock.currentTimeMillis;
+    const result = yield* runIdf(idf, env, input.directory, ["build"], "20 minutes");
+    const durationMs = (yield* Clock.currentTimeMillis) - started;
+    const output = `${result.stdout}\n${result.stderr}`;
+    const appBinary = parseAppBinarySize(output);
+    return {
+      ok: result.code === 0 && !result.timedOut,
+      durationMs,
+      diagnostics: parseBuildDiagnostics(output, input.directory),
+      ...(appBinary ? { appBinary } : {}),
+      logTail: result.timedOut ? "Build timed out after 20 minutes." : logTail(output),
+    } satisfies HardwareBuildResult;
+  });
+
+  return HardwareService.of({ doctor, chipInfo, createProject, build });
 });
 
 export const layer = Layer.effect(HardwareService, make());
