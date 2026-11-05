@@ -65,6 +65,7 @@ import {
   type SDKResultMessage,
   type SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
+import { boardWriteDenial, findBoardWrite } from "../../hardware/boardWriteGuard.ts";
 import type {
   AskUserQuestionInput,
   WebSearchOutput,
@@ -1740,6 +1741,26 @@ To wait for a background command or Monitor you started (tests, a build), call \
 `;
 
 // Native subagents start from their task, not this session's system prompt.
+/** Agents flash through hw_flash, which asks the user; the shell would bypass that. */
+const kittyBoardWriteGuard: HookCallback = (input) => {
+  if (input.hook_event_name !== "PreToolUse" || input.tool_name !== "Bash") {
+    return Promise.resolve({});
+  }
+  const command = (input.tool_input as { readonly command?: unknown } | undefined)?.command;
+  const write = typeof command === "string" ? findBoardWrite(command) : undefined;
+  return Promise.resolve(
+    write
+      ? {
+          hookSpecificOutput: {
+            hookEventName: "PreToolUse",
+            permissionDecision: "deny",
+            permissionDecisionReason: boardWriteDenial(write),
+          },
+        }
+      : {},
+  );
+};
+
 const subagentDeviceInstructions: HookCallback = () =>
   Promise.resolve({
     hookSpecificOutput: {
@@ -1893,8 +1914,17 @@ export function makeClaudeQueryOptions(input: {
         ...launchAppendSystemPrompt,
       ].join("\n\n"),
     },
-    ...(deviceInstructions
-      ? { hooks: { SubagentStart: [{ hooks: [subagentDeviceInstructions] }] } }
+    ...(deviceInstructions || input.mcpServers !== undefined
+      ? {
+          hooks: {
+            ...(deviceInstructions
+              ? { SubagentStart: [{ hooks: [subagentDeviceInstructions] }] }
+              : {}),
+            ...(input.mcpServers !== undefined
+              ? { PreToolUse: [{ matcher: "Bash", hooks: [kittyBoardWriteGuard] }] }
+              : {}),
+          },
+        }
       : {}),
     ...(Object.keys(extraArgs).length === 0 ? {} : { extraArgs }),
   };

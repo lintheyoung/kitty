@@ -730,6 +730,38 @@ describe("ClaudeAdapterV2 device instructions", () => {
     assert.deepEqual(await subagentContext({ mcp: true, deviceToolsAvailable: false }), []);
     assert.deepEqual(await subagentContext({ mcp: false, deviceToolsAvailable: true }), []);
   });
+
+  it("blocks shell commands that flash a board when Kitty's hardware tools are there", async () => {
+    const decide = (input: { readonly mcp: boolean }, command: string) =>
+      Promise.all(
+        (options({ ...input, deviceToolsAvailable: false }).hooks?.PreToolUse ?? []).flatMap(
+          (matcher) =>
+            matcher.hooks.map((hook) =>
+              hook(
+                {
+                  hook_event_name: "PreToolUse",
+                  tool_name: "Bash",
+                  tool_input: { command },
+                  tool_use_id: "tool-1",
+                  session_id: "native-thread-claude-devices",
+                  transcript_path: "/transcript.jsonl",
+                  cwd: "/workspace",
+                },
+                "tool-1",
+                { signal: new AbortController().signal },
+              ),
+            ),
+        ),
+      );
+    const [flash] = await decide({ mcp: true }, "cd fw && idf.py -p /dev/cu.usbmodem1301 flash");
+    assert.equal(
+      (flash as { hookSpecificOutput?: { permissionDecision?: string } }).hookSpecificOutput
+        ?.permissionDecision,
+      "deny",
+    );
+    assert.deepEqual(await decide({ mcp: true }, "idf.py build"), [{}]);
+    assert.deepEqual(await decide({ mcp: false }, "idf.py flash"), []);
+  });
 });
 
 describe("ClaudeAdapterV2 context usage", () => {
