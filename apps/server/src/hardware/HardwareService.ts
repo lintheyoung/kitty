@@ -10,6 +10,13 @@ import {
   type HardwareProject,
   type HardwareProjectCreated,
   type HardwareProjectCreateInput,
+  type HardwareSdkconfigEntry,
+  type HardwareSdkconfigGetInput,
+  type HardwareSdkconfigGetResult,
+  type HardwareSdkconfigSetInput,
+  type HardwareSdkconfigSetResult,
+  type HardwareSetTargetInput,
+  type HardwareSetTargetResult,
   HardwareToolError,
 } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
@@ -24,6 +31,16 @@ import * as Path from "effect/Path";
 import * as ProcessRunner from "../processRunner.ts";
 import { logTail, parseAppBinarySize, parseBuildDiagnostics } from "./buildOutput.ts";
 import { parseEsptoolChipInfo } from "./esptoolOutput.ts";
+import {
+  applySdkconfigUpdates,
+  encodeSdkconfigValue,
+  entryValue,
+  isSdkconfigKey,
+  normalizeSdkconfigKey,
+  parseKconfigChoices,
+  parseSdkconfig,
+  searchSdkconfig,
+} from "./sdkconfig.ts";
 import {
   classifyIdfVersion,
   classifyKicadVersion,
@@ -62,6 +79,17 @@ export class HardwareService extends Context.Service<
       input: HardwareBuildInput & { readonly directory: string },
       onOutput?: (text: string) => void,
     ) => Effect.Effect<HardwareBuildResult, HardwareToolError>;
+    /** Switches the chip; regenerates sdkconfig from sdkconfig.defaults and clears the build. */
+    readonly setTarget: (
+      input: HardwareSetTargetInput & { readonly directory: string },
+    ) => Effect.Effect<HardwareSetTargetResult, HardwareToolError>;
+    readonly sdkconfigGet: (
+      input: HardwareSdkconfigGetInput & { readonly directory: string },
+    ) => Effect.Effect<HardwareSdkconfigGetResult, HardwareToolError>;
+    /** Applies values through Kconfig (`idf.py reconfigure`) and reports what it kept. */
+    readonly sdkconfigSet: (
+      input: HardwareSdkconfigSetInput & { readonly directory: string },
+    ) => Effect.Effect<HardwareSdkconfigSetResult, HardwareToolError>;
     /** ESP-IDF projects up to three levels below `workspaceRoot`. */
     readonly listProjects: (workspaceRoot: string) => Effect.Effect<ReadonlyArray<HardwareProject>>;
   }
@@ -432,17 +460,238 @@ export const make = Effect.fn("HardwareService.make")(function* () {
     } satisfies HardwareProjectCreated;
   });
 
-  const build = Effect.fn("HardwareService.build")(function* (
-    input: HardwareBuildInput & { readonly directory: string },
-    onOutput?: (text: string) => void,
-  ) {
-    const { idf, env } = yield* requireIdf();
+  const requireProject = Effect.fn("HardwareService.requireProject")(function* (input: {
+    readonly path: string;
+    readonly directory: string;
+  }) {
     if (!(yield* exists(path.join(input.directory, "CMakeLists.txt")))) {
       return yield* failure(
         "invalid_path",
         `${input.path} is not an ESP-IDF project (no CMakeLists.txt).`,
       );
     }
+  });
+
+  const commandFailed = (
+    command: string,
+    result: { readonly stdout: string; readonly stderr: string; readonly timedOut: boolean },
+  ) =>
+    failure(
+      "command_failed",
+      result.timedOut
+        ? `${command} timed out.`
+        : `${command} failed.\n${logTail(`${result.stdout}\n${result.stderr}`, 20)}`,
+    );
+
+  const readText = (file: string) => fs.readFileString(file).pipe(Effect.option);
+  const writeText = (file: string, text: string) =>
+    fs
+      .writeFileString(file, text)
+      .pipe(
+        Effect.mapError((cause) =>
+          failure("command_failed", `Could not write ${path.basename(file)}: ${cause.message}`),
+        ),
+      );
+
+  /** Re-runs Kconfig over sdkconfig.defaults + sdkconfig, creating sdkconfig if needed. */
+  const reconfigure = Effect.fn("HardwareService.reconfigure")(function* (
+    idf: FoundIdf,
+    env: NodeJS.ProcessEnv,
+    directory: string,
+  ) {
+    const result = yield* runIdf(idf, env, directory, ["reconfigure"], "5 minutes");
+    if (result.code !== 0 || result.timedOut) {
+      return yield* commandFailed("idf.py reconfigure", result);
+    }
+  });
+
+  const setTarget = Effect.fn("HardwareService.setTarget")(function* (
+    input: HardwareSetTargetInput & { readonly directory: string },
+  ) {
+    const { idf, env } = yield* requireIdf();
+    yield* requireProject(input);
+    const result = yield* runIdf(
+      idf,
+      env,
+      input.directory,
+      ["set-target", input.target],
+      "5 minutes",
+    );
+    if (result.code !== 0 || result.timedOut) {
+      return yield* commandFailed(`idf.py set-target ${input.target}`, result);
+    }
+    return { path: input.path, target: input.target } satisfies HardwareSetTargetResult;
+  });
+
+  const MAX_SDKCONFIG_ENTRIES = 100;
+
+  const loadSdkconfig = Effect.fn("HardwareService.loadSdkconfig")(function* (input: {
+    readonly path: string;
+    readonly directory: string;
+  }) {
+    const { idf, env } = yield* requireIdf();
+    yield* requireProject(input);
+    const file = path.join(input.directory, "sdkconfig");
+    let text = yield* readText(file);
+    if (Option.isNone(text)) {
+      yield* reconfigure(idf, env, input.directory);
+      text = yield* readText(file);
+    }
+    if (Option.isNone(text)) {
+      return yield* failure("command_failed", "idf.py reconfigure did not write sdkconfig.");
+    }
+    return { idf, env, file, text: text.value };
+  });
+
+  const sdkconfigGet = Effect.fn("HardwareService.sdkconfigGet")(function* (
+    input: HardwareSdkconfigGetInput & { readonly directory: string },
+  ) {
+    if (!input.keys?.length && !input.search?.trim()) {
+      return yield* failure("invalid_argument", "Pass keys or search.");
+    }
+    const { text } = yield* loadSdkconfig(input);
+    const entries = parseSdkconfig(text);
+    const wanted = new Set<string>();
+    const missing: Array<string> = [];
+    for (const key of input.keys ?? []) {
+      const normalized = normalizeSdkconfigKey(key);
+      if (entries.has(normalized)) wanted.add(normalized);
+      else missing.push(normalized);
+    }
+    if (input.search?.trim()) {
+      for (const key of searchSdkconfig(entries, input.search)) wanted.add(key);
+    }
+    const keys = [...wanted];
+    const target = parseSdkconfigTarget(text);
+    return {
+      ...(target ? { target } : {}),
+      entries: keys.slice(0, MAX_SDKCONFIG_ENTRIES).map((key): HardwareSdkconfigEntry => ({
+        key,
+        value: entryValue(entries.get(key) ?? { raw: null }),
+      })),
+      missing,
+      truncated: keys.length > MAX_SDKCONFIG_ENTRIES,
+    } satisfies HardwareSdkconfigGetResult;
+  });
+
+  const sdkconfigSet = Effect.fn("HardwareService.sdkconfigSet")(function* (
+    input: HardwareSdkconfigSetInput & { readonly directory: string },
+  ) {
+    const requested = Object.entries(input.values).map(
+      ([key, value]) => [normalizeSdkconfigKey(key), value] as const,
+    );
+    if (requested.length === 0) return yield* failure("invalid_argument", "Pass values to set.");
+    const invalid = requested.filter(([key]) => !isSdkconfigKey(key)).map(([key]) => key);
+    if (invalid.length > 0) {
+      return yield* failure("invalid_argument", `Not option names: ${invalid.join(", ")}.`);
+    }
+    const { idf, env, file, text: before } = yield* loadSdkconfig(input);
+    const beforeEntries = parseSdkconfig(before);
+    const choices = parseKconfigChoices(
+      Option.getOrElse(
+        yield* readText(path.join(input.directory, "build", "config", "kconfig_menus.json")),
+        () => "",
+      ),
+    );
+    const updates = new Map<string, string | null>();
+    /** Choice entries cleared on behalf of a requested entry of the same choice. */
+    const clearedFor = new Map<string, string>();
+    for (const [key, value] of requested) {
+      const raw = encodeSdkconfigValue(value, beforeEntries.get(key)?.raw);
+      updates.set(key, raw);
+      // Kconfig keeps the last `=y` of a choice, so clear the other entries.
+      if (raw === "y") {
+        for (const sibling of choices.get(key) ?? []) {
+          if (requested.some(([other]) => other === sibling)) continue;
+          updates.set(sibling, null);
+          clearedFor.set(sibling, key);
+        }
+      }
+    }
+    const configure = Effect.fn("HardwareService.sdkconfigSet.configure")(function* (
+      next: ReadonlyMap<string, string | null>,
+    ) {
+      yield* writeText(file, applySdkconfigUpdates(before, next));
+      // A failed reconfigure leaves the project as it was.
+      yield* reconfigure(idf, env, input.directory).pipe(
+        Effect.tapError(() => writeText(file, before).pipe(Effect.ignore)),
+      );
+      return parseSdkconfig(Option.getOrElse(yield* readText(file), () => ""));
+    });
+    let after = yield* configure(updates);
+
+    const applied: Array<HardwareSdkconfigEntry> = [];
+    const rejected: Array<HardwareSdkconfigSetResult["rejected"][number]> = [];
+    for (const [key, value] of requested) {
+      const actual = after.get(key);
+      const wantedRaw = updates.get(key) ?? null;
+      if (actual === undefined) {
+        if (wantedRaw === null) {
+          applied.push({ key, value: false });
+        } else {
+          rejected.push({
+            key,
+            requested: value,
+            reason:
+              "Not an option in this project: unknown name, or an option it depends on is off.",
+          });
+        }
+      } else if (actual.raw === wantedRaw) {
+        applied.push({ key, value: entryValue(actual) });
+      } else {
+        rejected.push({
+          key,
+          requested: value,
+          actual: entryValue(actual),
+          reason: "Kconfig kept another value: out of range, or another option decides it.",
+        });
+      }
+    }
+
+    if (rejected.length > 0) {
+      // Kconfig resets a rejected value to its default rather than the
+      // previous one, so configure again with only the accepted values.
+      const rejectedKeys = new Set(rejected.map((entry) => entry.key));
+      const accepted = new Map(
+        [...updates].filter(([key]) => {
+          const requester = clearedFor.get(key);
+          return !rejectedKeys.has(key) && !(requester && rejectedKeys.has(requester));
+        }),
+      );
+      after = yield* configure(accepted);
+    }
+
+    const persist = input.persist ?? true;
+    if (persist && applied.length > 0) {
+      // Record the accepted values, and follow any option already in the
+      // defaults that Kconfig changed as a result (e.g. the other choices of a
+      // choice group), so the defaults never contradict the new configuration.
+      const defaultsFile = path.join(input.directory, "sdkconfig.defaults");
+      const defaults = Option.getOrElse(yield* readText(defaultsFile), () => "");
+      const defaultsUpdates = new Map<string, string | null>();
+      for (const { key } of applied) defaultsUpdates.set(key, after.get(key)?.raw ?? null);
+      for (const [key, entry] of parseSdkconfig(defaults)) {
+        if (defaultsUpdates.has(key)) continue;
+        const now = after.get(key);
+        if (now && now.raw !== entry.raw && beforeEntries.get(key)?.raw !== now.raw) {
+          defaultsUpdates.set(key, now.raw);
+        }
+      }
+      yield* writeText(defaultsFile, applySdkconfigUpdates(defaults, defaultsUpdates));
+    }
+    return {
+      applied,
+      rejected,
+      persisted: persist && applied.length > 0,
+    } satisfies HardwareSdkconfigSetResult;
+  });
+
+  const build = Effect.fn("HardwareService.build")(function* (
+    input: HardwareBuildInput & { readonly directory: string },
+    onOutput?: (text: string) => void,
+  ) {
+    const { idf, env } = yield* requireIdf();
+    yield* requireProject(input);
     const started = yield* Clock.currentTimeMillis;
     const result = yield* runIdf(idf, env, input.directory, ["build"], "20 minutes", onOutput);
     const durationMs = (yield* Clock.currentTimeMillis) - started;
@@ -496,7 +745,16 @@ export const make = Effect.fn("HardwareService.make")(function* () {
     return projects.toSorted((a, b) => a.path.localeCompare(b.path));
   });
 
-  return HardwareService.of({ doctor, chipInfo, createProject, build, listProjects });
+  return HardwareService.of({
+    doctor,
+    chipInfo,
+    createProject,
+    build,
+    setTarget,
+    sdkconfigGet,
+    sdkconfigSet,
+    listProjects,
+  });
 });
 
 export const layer = Layer.effect(HardwareService, make());

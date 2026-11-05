@@ -49,4 +49,25 @@ export const layer = McpToolAccess.toLayer(HardwareToolkit, {
       return yield* hardware.build({ ...input, directory });
     }),
   ),
+  hw_set_target: McpToolAccess.actsAsCaller((input) =>
+    Effect.gen(function* () {
+      const hardware = yield* HardwareService.HardwareService;
+      const directory = yield* workspaceDirectory(input.path);
+      return yield* hardware.setTarget({ ...input, directory });
+    }),
+  ),
+  hw_sdkconfig_get: McpToolAccess.actsAsCaller((input) =>
+    Effect.gen(function* () {
+      const hardware = yield* HardwareService.HardwareService;
+      const directory = yield* workspaceDirectory(input.path);
+      return yield* hardware.sdkconfigGet({ ...input, directory });
+    }),
+  ),
+  hw_sdkconfig_set: McpToolAccess.actsAsCaller((input) =>
+    Effect.gen(function* () {
+      const hardware = yield* HardwareService.HardwareService;
+      const directory = yield* workspaceDirectory(input.path);
+      return yield* hardware.sdkconfigSet({ ...input, directory });
+    }),
+  ),
 });

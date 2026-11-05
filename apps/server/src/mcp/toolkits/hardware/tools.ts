@@ -7,6 +7,12 @@ import {
   HardwareDoctorReport,
   HardwareProjectCreated,
   HardwareProjectCreateInput,
+  HardwareSdkconfigGetInput,
+  HardwareSdkconfigGetResult,
+  HardwareSdkconfigSetInput,
+  HardwareSdkconfigSetResult,
+  HardwareSetTargetInput,
+  HardwareSetTargetResult,
   HardwareToolError,
   OrchestratorMcpFailure,
 } from "@t3tools/contracts";
@@ -78,9 +84,52 @@ const HardwareBuildTool = Tool.make("hw_build", {
   .annotate(Tool.Idempotent, true)
   .annotate(Tool.OpenWorld, false);
 
+const HardwareSetTargetTool = Tool.make("hw_set_target", {
+  description:
+    "Switch an ESP-IDF project to another chip (idf.py set-target). Regenerates sdkconfig from sdkconfig.defaults, so options not recorded there are lost, and clears the build.",
+  parameters: HardwareSetTargetInput,
+  success: HardwareSetTargetResult,
+  failure: HardwareFailure,
+  dependencies: workspaceDependencies,
+})
+  .annotate(Tool.Title, "Set ESP-IDF chip target")
+  .annotate(Tool.Destructive, true)
+  .annotate(Tool.Idempotent, true)
+  .annotate(Tool.OpenWorld, false);
+
+const HardwareSdkconfigGetTool = Tool.make("hw_sdkconfig_get", {
+  description:
+    "Read an ESP-IDF project's configuration (sdkconfig, as menuconfig shows it) by option names or a search. Up to 100 options per call.",
+  parameters: HardwareSdkconfigGetInput,
+  success: HardwareSdkconfigGetResult,
+  failure: HardwareFailure,
+  dependencies: workspaceDependencies,
+})
+  .annotate(Tool.Title, "Read ESP-IDF configuration")
+  .annotate(Tool.Readonly, true)
+  .annotate(Tool.Destructive, false)
+  .annotate(Tool.Idempotent, true)
+  .annotate(Tool.OpenWorld, false);
+
+const HardwareSdkconfigSetTool = Tool.make("hw_sdkconfig_set", {
+  description:
+    "Set ESP-IDF configuration options (like menuconfig) through Kconfig, which enforces dependencies and ranges. Returns which values were applied and which Kconfig rejected. For a choice, set the wanted entry to true. Rebuild afterwards.",
+  parameters: HardwareSdkconfigSetInput,
+  success: HardwareSdkconfigSetResult,
+  failure: HardwareFailure,
+  dependencies: workspaceDependencies,
+})
+  .annotate(Tool.Title, "Set ESP-IDF configuration")
+  .annotate(Tool.Destructive, false)
+  .annotate(Tool.Idempotent, true)
+  .annotate(Tool.OpenWorld, false);
+
 export const HardwareToolkit = Toolkit.make(
   HardwareDoctorTool,
   HardwareChipInfoTool,
   HardwareProjectCreateTool,
   HardwareBuildTool,
+  HardwareSetTargetTool,
+  HardwareSdkconfigGetTool,
+  HardwareSdkconfigSetTool,
 );
