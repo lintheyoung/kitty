@@ -13,6 +13,7 @@ import {
   type EnvironmentId,
   type HardwareProjectBuildInput,
   type HardwareProjectFlashInput,
+  type HardwareProjectTestRunInput,
   type HardwareToolchainInstallInput,
   HardwareToolError,
   WS_METHODS,
@@ -215,4 +216,33 @@ export const hardwarePinmapSync = createEnvironmentRpcCommand(connectionAtomRunt
 export const hardwareOpenInKicad = createEnvironmentRpcCommand(connectionAtomRuntime, {
   label: "environment-data:hardware:open-in-kicad",
   tag: WS_METHODS.hardwareOpenInKicad,
+});
+
+/** Test plans (tests/test-plan.yaml) in a thread's workspace, with their newest report. */
+export const hardwareTestPlans = createEnvironmentRpcQueryAtomFamily(connectionAtomRuntime, {
+  label: "environment-data:hardware:test-plans",
+  tag: WS_METHODS.hardwareTestPlans,
+  staleTimeMs: 10_000,
+  idleTtlMs: 5 * 60_000,
+});
+
+export const hardwareTestCreate = createEnvironmentRpcCommand(connectionAtomRuntime, {
+  label: "environment-data:hardware:test-create",
+  tag: WS_METHODS.hardwareTestCreate,
+});
+
+/** Builds and flashes a plan's test firmware, reads the board and judges the cases, streaming the log. */
+export const hardwareTestRun = createRuntimeCommand(connectionAtomRuntime, {
+  label: "environment-data:hardware:test-run",
+  execute: (input: {
+    readonly environmentId: EnvironmentId;
+    readonly input: HardwareProjectTestRunInput;
+    readonly onOutput: (text: string) => void;
+  }) =>
+    runWithOutput(
+      input.environmentId,
+      runStream(WS_METHODS.hardwareTestRun, input.input),
+      input.onOutput,
+      "test run",
+    ),
 });

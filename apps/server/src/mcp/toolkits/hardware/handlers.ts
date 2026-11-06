@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
 
 import * as HardwareService from "../../../hardware/HardwareService.ts";
 import * as KicadService from "../../../hardware/KicadService.ts";
+import { createBoardTest, runBoardTests } from "../../../hardware/boardTestRunner.ts";
 import { createHardwareRepo } from "../../../hardware/newHardwareProject.ts";
 import { resolveInWorkspace } from "../../../hardware/workspacePath.ts";
 import { threadWorkspaceRoot } from "../../../project/threadWorkspaceRoot.ts";
@@ -151,6 +152,20 @@ export const layer = McpToolAccess.toLayer(HardwareToolkit, {
     Effect.gen(function* () {
       const kicad = yield* KicadService.KicadService;
       return yield* kicad.pinCheck({ ...input, workspaceRoot: yield* callerWorkspaceRoot() });
+    }),
+  ),
+  hw_test_firmware_create: McpToolAccess.actsAsCaller((input) =>
+    Effect.gen(function* () {
+      return yield* createBoardTest({ ...input, workspaceRoot: yield* callerWorkspaceRoot() });
+    }),
+  ),
+  hw_test_run: McpToolAccess.actsAsCaller((input) =>
+    Effect.gen(function* () {
+      const scope = yield* McpInvocationContext.McpInvocationContext;
+      return yield* runBoardTests(
+        { ...input, workspaceRoot: yield* callerWorkspaceRoot() },
+        { approvalFor: { threadId: scope.thread?.threadId } },
+      );
     }),
   ),
   hw_hardware_project_new: McpToolAccess.actsAsCaller((input) =>

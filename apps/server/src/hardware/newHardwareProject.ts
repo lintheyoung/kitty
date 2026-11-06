@@ -33,6 +33,9 @@ const GITIGNORE = `# Kitty hardware project
 firmware/build/
 firmware/managed_components/
 firmware/sdkconfig.old
+tests/*/build/
+tests/*/managed_components/
+tests/*/sdkconfig.old
 hardware/kicad/*-backups/
 hardware/kicad/fab/
 hardware/kicad/*.lck

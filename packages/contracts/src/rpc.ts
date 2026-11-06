@@ -326,11 +326,15 @@ import {
   HardwareProjectsResult,
   HardwareDesignInput,
   HardwarePreviewInput,
+  HardwareProjectTestCreateInput,
+  HardwareProjectTestRunInput,
+  HardwareTestPlansResult,
   HardwareNewProjectInput,
   HardwareToolchainInstallEvent,
   HardwareToolchainInstallInput,
   HardwareToolError,
 } from "./hardware.ts";
+import { HardwareTestFirmwareCreateResult, HardwareTestRunEvent } from "./boardTests.ts";
 import {
   HardwareProjectNewResult,
   KicadBomResult,
@@ -539,6 +543,9 @@ export const WS_METHODS = {
   hardwarePinmapSync: "hardware.pinmapSync",
   hardwareOpenInKicad: "hardware.openInKicad",
   hardwarePreview: "hardware.preview",
+  hardwareTestPlans: "hardware.testPlans",
+  hardwareTestCreate: "hardware.testCreate",
+  hardwareTestRun: "hardware.testRun",
   deviceTestHost: "device.testHost",
   deviceEasAccount: "device.easAccount",
   deviceSimlockIdentity: "device.simlockIdentity",
@@ -1820,6 +1827,25 @@ const WsHardwareBomRpc = Rpc.make(WS_METHODS.hardwareBom, {
   error: Schema.Union([HardwareToolError, EnvironmentAuthorizationError]),
 });
 
+const WsHardwareTestPlansRpc = Rpc.make(WS_METHODS.hardwareTestPlans, {
+  payload: HardwareProjectsInput,
+  success: HardwareTestPlansResult,
+  error: Schema.Union([HardwareToolError, EnvironmentAuthorizationError]),
+});
+
+const WsHardwareTestCreateRpc = Rpc.make(WS_METHODS.hardwareTestCreate, {
+  payload: HardwareProjectTestCreateInput,
+  success: HardwareTestFirmwareCreateResult,
+  error: Schema.Union([HardwareToolError, EnvironmentAuthorizationError]),
+});
+
+const WsHardwareTestRunRpc = Rpc.make(WS_METHODS.hardwareTestRun, {
+  payload: HardwareProjectTestRunInput,
+  success: HardwareTestRunEvent,
+  error: Schema.Union([HardwareToolError, EnvironmentAuthorizationError]),
+  stream: true,
+});
+
 const WsHardwarePreviewRpc = Rpc.make(WS_METHODS.hardwarePreview, {
   payload: HardwarePreviewInput,
   success: KicadPreviewResult,
@@ -2355,6 +2381,9 @@ export const WsRpcGroup = RpcGroup.make(
   WsHardwarePinmapSyncRpc,
   WsHardwareOpenInKicadRpc,
   WsHardwarePreviewRpc,
+  WsHardwareTestPlansRpc,
+  WsHardwareTestCreateRpc,
+  WsHardwareTestRunRpc,
   WsDeviceTestHostRpc,
   WsDeviceEasAccountRpc,
   WsDeviceSimlockIdentityRpc,

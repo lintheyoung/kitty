@@ -6,6 +6,7 @@ import { useEnvironmentQuery } from "../../state/query";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { HardwareApprovalRequests, HardwareBoards } from "./HardwareBoards";
+import { BoardTests } from "./BoardTests";
 import { HardwareDesigns } from "./HardwareDesigns";
 import { HardwareProjects } from "./HardwareProjects";
 import { ToolchainInstall } from "./ToolchainInstall";
@@ -108,6 +109,7 @@ export function HardwarePanel(props: {
           <>
             <HardwareDesigns threadRef={props.threadRef} projectId={props.projectId} />
             <HardwareProjects threadRef={props.threadRef} projectId={props.projectId} />
+            <BoardTests threadRef={props.threadRef} projectId={props.projectId} />
           </>
         )}
       </div>

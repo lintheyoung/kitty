@@ -485,6 +485,37 @@ export const HardwareDesignInput = Schema.Struct({
 });
 export type HardwareDesignInput = typeof HardwareDesignInput.Type;
 
+export const HardwareTestPlansResult = Schema.Struct({
+  plans: Schema.Array(
+    Schema.Struct({
+      /** The plan file, relative to the workspace. */
+      path: Schema.String,
+      name: Schema.optional(Schema.String),
+      cases: Schema.Int,
+      firmware: Schema.optional(Schema.String),
+      /** Field-level problems; the plan cannot run until they are fixed. */
+      errors: Schema.Array(Schema.String),
+      /** The newest Markdown report, relative to the workspace. */
+      lastReport: Schema.optional(Schema.String),
+    }),
+  ),
+});
+export type HardwareTestPlansResult = typeof HardwareTestPlansResult.Type;
+
+export const HardwareProjectTestRunInput = Schema.Struct({
+  ...HardwareWorkspaceTarget,
+  plan: Schema.String,
+  flash: Schema.optional(Schema.Boolean),
+  port: Schema.optional(Schema.String),
+});
+export type HardwareProjectTestRunInput = typeof HardwareProjectTestRunInput.Type;
+
+export const HardwareProjectTestCreateInput = Schema.Struct({
+  ...HardwareWorkspaceTarget,
+  root: Schema.optional(Schema.String),
+});
+export type HardwareProjectTestCreateInput = typeof HardwareProjectTestCreateInput.Type;
+
 export const HardwarePreviewInput = Schema.Struct({
   ...HardwareWorkspaceTarget,
   path: Schema.String,

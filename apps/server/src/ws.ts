@@ -1,5 +1,6 @@
 import {
   type HardwareBuildEvent,
+  type HardwareTestRunEvent,
   type HardwareFlashEvent,
   type HardwareMonitorEvent,
   type HardwareToolchainInstallEvent,
@@ -201,6 +202,7 @@ import * as DeviceService from "./device/DeviceService.ts";
 import * as HardwareService from "./hardware/HardwareService.ts";
 import * as KicadService from "./hardware/KicadService.ts";
 import { createHardwareRepo } from "./hardware/newHardwareProject.ts";
+import { createBoardTest, listTestPlans, runBoardTests } from "./hardware/boardTestRunner.ts";
 import { hardwareProjectRoot } from "./hardware/projectModel.ts";
 import { resolveInWorkspace } from "./hardware/workspacePath.ts";
 import { remoteSshDeviceHosts } from "./device/localSshDeviceHost.ts";
@@ -1449,6 +1451,9 @@ export const layerWsRpc = (
         | Effect.Services<ReturnType<typeof requireHardwareWorkspace>>
         | Effect.Services<ReturnType<typeof resolveInWorkspace>>
         | Effect.Services<ReturnType<typeof createHardwareRepo>>
+        | Effect.Services<ReturnType<typeof runBoardTests>>
+        | Effect.Services<ReturnType<typeof createBoardTest>>
+        | Effect.Services<ReturnType<typeof listTestPlans>>
       >();
       const orchestrationEngine = yield* Orchestrator.OrchestratorV2;
       const random = yield* SecureRandom.SecureRandom;
@@ -3319,6 +3324,44 @@ export const layerWsRpc = (
           requireHardwareWorkspace(input).pipe(
             Effect.flatMap((workspaceRoot) =>
               kicadService.bom({ path: input.path, workspaceRoot }),
+            ),
+          ),
+        [WS_METHODS.hardwareTestPlans]: (input) =>
+          requireHardwareWorkspace(input).pipe(
+            Effect.flatMap((workspaceRoot) => listTestPlans(workspaceRoot)),
+            Effect.provide(hardwareWorkspaceContext),
+          ),
+        [WS_METHODS.hardwareTestCreate]: (input) =>
+          requireHardwareWorkspace(input).pipe(
+            Effect.flatMap((workspaceRoot) =>
+              createBoardTest({ workspaceRoot, ...(input.root ? { root: input.root } : {}) }),
+            ),
+            Effect.provide(hardwareWorkspaceContext),
+          ),
+        // A run the user starts in the panel flashes without a further approval.
+        [WS_METHODS.hardwareTestRun]: (input) =>
+          Stream.callback<HardwareTestRunEvent, HardwareToolError>((queue) =>
+            requireHardwareWorkspace(input).pipe(
+              Effect.flatMap((workspaceRoot) =>
+                runBoardTests(
+                  {
+                    workspaceRoot,
+                    plan: input.plan,
+                    ...(input.flash === undefined ? {} : { flash: input.flash }),
+                    ...(input.port ? { port: input.port } : {}),
+                  },
+                  {
+                    onOutput: (text) => {
+                      Queue.offerUnsafe(queue, { type: "output", text });
+                    },
+                  },
+                ),
+              ),
+              Effect.flatMap((result) => Queue.offer(queue, { type: "complete", result })),
+              Effect.catch((error) => Queue.fail(queue, error)),
+              Effect.andThen(Queue.end(queue)),
+              Effect.provide(hardwareWorkspaceContext),
+              Effect.forkScoped,
             ),
           ),
         [WS_METHODS.hardwarePreview]: (input) =>

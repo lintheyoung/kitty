@@ -20,6 +20,10 @@ import {
   HardwareSdkconfigSetResult,
   HardwareSetTargetInput,
   HardwareSetTargetResult,
+  HardwareTestFirmwareCreateInput,
+  HardwareTestFirmwareCreateResult,
+  HardwareTestRunInput,
+  HardwareTestRunResult,
   HardwareToolError,
   HardwareProjectNewInput,
   HardwareProjectNewResult,
@@ -280,6 +284,38 @@ const KicadFabExportTool = Tool.make("kicad_fab_export", {
   .annotate(Tool.Idempotent, true)
   .annotate(Tool.OpenWorld, false);
 
+const boardTestDependencies = [
+  ...callerDependencies,
+  ProjectService.ProjectService,
+  Path.Path,
+  FileSystem.FileSystem,
+];
+
+const HardwareTestFirmwareCreateTool = Tool.make("hw_test_firmware_create", {
+  description:
+    "Create Kitty's standard Board Test Firmware in tests/board-test (chip, flash, heap, I2C scan, IMU WHO_AM_I, GPIO loopback, supply voltage) and a starting tests/test-plan.yaml. I2C pins and devices come from hardware/board.json and pinmap.json. Edit the plan's cases, then run hw_test_run.",
+  parameters: HardwareTestFirmwareCreateInput,
+  success: HardwareTestFirmwareCreateResult,
+  failure: HardwareFailure,
+  dependencies: boardTestDependencies,
+})
+  .annotate(Tool.Title, "Create board test firmware")
+  .annotate(Tool.Destructive, false)
+  .annotate(Tool.OpenWorld, false);
+
+const HardwareTestRunTool = Tool.make("hw_test_run", {
+  description:
+    'Run a board test plan: build and flash its test firmware (the user must allow the flash in the Hardware panel, so tell them first), reset the board, read its {"kitty":"metric",...} JSON lines, judge every case, and save Markdown and JSON reports in tests/reports/. Returns pass/fail per case with the measured value.',
+  parameters: HardwareTestRunInput,
+  success: HardwareTestRunResult,
+  failure: HardwareFailure,
+  dependencies: boardTestDependencies,
+})
+  .annotate(Tool.Title, "Run board tests")
+  .annotate(Tool.Destructive, true)
+  .annotate(Tool.Idempotent, false)
+  .annotate(Tool.OpenWorld, false);
+
 const HardwareProjectNewTool = Tool.make("hw_hardware_project_new", {
   description:
     "Start a new product as its own git repository, hardware and firmware together: a blank KiCad 10 project in hardware/kicad/, an ESP-IDF firmware for the ESP32-S3 in firmware/, manufacturing/, project.json and hardware/board.json, registered as a new Kitty project. By default it goes next to the current project. Use when the user wants a new board; for firmware only, use hw_project_create.",
@@ -359,4 +395,6 @@ export const HardwareToolkit = Toolkit.make(
   HardwareProjectInspectTool,
   HardwarePinmapSyncTool,
   HardwarePinCheckTool,
+  HardwareTestFirmwareCreateTool,
+  HardwareTestRunTool,
 );
