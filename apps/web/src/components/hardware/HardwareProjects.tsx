@@ -45,6 +45,25 @@ function LiveLog(props: { readonly log: string; readonly action: Action }) {
   );
 }
 
+/**
+ * Projects copied from the same ESP-IDF example share a CMake name, so the
+ * directory names them; the CMake name follows in the details when it differs.
+ */
+function projectTitle(project: HardwareProject) {
+  return project.path === "." ? project.name : (project.path.split("/").at(-1) ?? project.path);
+}
+
+function projectDetails(project: HardwareProject) {
+  const title = projectTitle(project);
+  return [
+    project.path !== "." && project.path !== title ? project.path : null,
+    project.name !== title ? project.name : null,
+    project.target ?? null,
+  ]
+    .filter((part) => part !== null)
+    .join(" · ");
+}
+
 /** Workspace path of a diagnostic's file, or null for files outside the project. */
 function workspacePath(project: HardwareProject, diagnostic: HardwareBuildDiagnostic) {
   if (!diagnostic.file || diagnostic.file.startsWith("/")) return null;
@@ -218,10 +237,9 @@ export function HardwareProjects(props: {
               <li key={project.path} className="flex flex-col gap-2 py-2">
                 <div className="flex items-center justify-between gap-2">
                   <div className="min-w-0">
-                    <div className="truncate text-sm font-medium">{project.name}</div>
+                    <div className="truncate text-sm font-medium">{projectTitle(project)}</div>
                     <div className="truncate font-mono text-2xs text-muted-foreground">
-                      {project.path}
-                      {project.target ? ` · ${project.target}` : ""}
+                      {projectDetails(project)}
                     </div>
                   </div>
                   <div className="flex shrink-0 gap-1">
