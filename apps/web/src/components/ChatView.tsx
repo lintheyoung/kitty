@@ -3339,6 +3339,9 @@ export default function ChatView(props: ChatViewProps) {
                 ? { onOpenProjectSettings: handleOpenDraftProjectSettingsStable }
                 : {})}
               {...(threadFindEnabled ? { onFindInThread: openThreadFindStable } : {})}
+              {...(activeProject && !activeProject.isScratch
+                ? { onOpenHardware: addHardwareSurfaceStable }
+                : {})}
             />
           </header>
         )}

@@ -1,4 +1,4 @@
-import { scopeProjectRef } from "@t3tools/client-runtime/environment";
+import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { runAtomCommand } from "@t3tools/client-runtime/state/runtime";
 import { ProjectId } from "@t3tools/contracts";
 import type {
@@ -29,6 +29,7 @@ import type * as Cause from "effect/Cause";
 import { useState } from "react";
 
 import { useNewThreadHandler } from "../../hooks/useHandleNewThread";
+import { useRightPanelStore } from "../../rightPanelStore";
 import { appAtomRegistry } from "../../rpc/atomRegistry";
 import {
   hardwareBom,
@@ -442,7 +443,14 @@ function NewHardwareProject(props: {
     // The new project reaches the sidebar through the project feed; wait for it, then open it.
     const projectRef = scopeProjectRef(environmentId, ProjectId.make(result.value.projectId));
     for (let attempt = 0; attempt < 20; attempt++) {
-      if ((await handleNewThread(projectRef)) !== null) return;
+      const opened = await handleNewThread(projectRef);
+      if (opened !== null) {
+        // Land on the new product with its boards and designs in view.
+        useRightPanelStore
+          .getState()
+          .open(scopeThreadRef(environmentId, opened.threadId), "hardware");
+        return;
+      }
       await new Promise((resolve) => setTimeout(resolve, 250));
     }
     setState({
