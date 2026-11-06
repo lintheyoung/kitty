@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
 
 import * as HardwareService from "../../../hardware/HardwareService.ts";
 import * as KicadService from "../../../hardware/KicadService.ts";
+import { createHardwareProject } from "../../../hardware/newHardwareProject.ts";
 import { resolveInWorkspace } from "../../../hardware/workspacePath.ts";
 import { threadWorkspaceRoot } from "../../../project/threadWorkspaceRoot.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
@@ -150,6 +151,14 @@ export const layer = McpToolAccess.toLayer(HardwareToolkit, {
     Effect.gen(function* () {
       const kicad = yield* KicadService.KicadService;
       return yield* kicad.pinCheck({ ...input, workspaceRoot: yield* callerWorkspaceRoot() });
+    }),
+  ),
+  hw_hardware_project_new: McpToolAccess.actsAsCaller((input) =>
+    Effect.gen(function* () {
+      return yield* createHardwareProject({
+        ...input,
+        workspaceRoot: yield* callerWorkspaceRoot(),
+      });
     }),
   ),
 });

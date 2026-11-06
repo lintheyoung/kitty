@@ -199,6 +199,8 @@ import { terminalOutputStream, withTerminalOutputWindow } from "./terminal/Outpu
 import * as ServerBrowser from "./preview/ServerBrowser.ts";
 import * as DeviceService from "./device/DeviceService.ts";
 import * as HardwareService from "./hardware/HardwareService.ts";
+import * as KicadService from "./hardware/KicadService.ts";
+import { createHardwareProject, hardwareProjectRoot } from "./hardware/newHardwareProject.ts";
 import { resolveInWorkspace } from "./hardware/workspacePath.ts";
 import { remoteSshDeviceHosts } from "./device/localSshDeviceHost.ts";
 import * as PreviewManager from "./preview/Manager.ts";
@@ -1421,6 +1423,7 @@ export const layerWsRpc = (
       const pullRequestSync = yield* PullRequestSyncReactor.PullRequestSyncReactor;
       const deviceService = yield* DeviceService.DeviceService;
       const hardwareService = yield* HardwareService.HardwareService;
+      const kicadService = yield* KicadService.KicadService;
       const requireHardwareWorkspace = Effect.fn("ws.requireHardwareWorkspace")(function* (target: {
         readonly threadId: ThreadId;
         readonly projectId: ProjectId;
@@ -1444,6 +1447,7 @@ export const layerWsRpc = (
       const hardwareWorkspaceContext = yield* Effect.context<
         | Effect.Services<ReturnType<typeof requireHardwareWorkspace>>
         | Effect.Services<ReturnType<typeof resolveInWorkspace>>
+        | Effect.Services<ReturnType<typeof createHardwareProject>>
       >();
       const orchestrationEngine = yield* Orchestrator.OrchestratorV2;
       const random = yield* SecureRandom.SecureRandom;
@@ -3282,6 +3286,58 @@ export const layerWsRpc = (
                 Effect.andThen(Queue.end(queue)),
                 Effect.forkScoped,
               ),
+          ),
+        [WS_METHODS.hardwareNewProject]: (input) =>
+          requireHardwareWorkspace(input).pipe(
+            Effect.flatMap((workspaceRoot) =>
+              createHardwareProject({
+                path: input.path,
+                ...(input.name ? { name: input.name } : {}),
+                workspaceRoot,
+              }),
+            ),
+            Effect.provide(hardwareWorkspaceContext),
+          ),
+        [WS_METHODS.hardwareDesigns]: (input) =>
+          requireHardwareWorkspace(input).pipe(
+            Effect.flatMap((workspaceRoot) => kicadService.listDesigns(workspaceRoot)),
+          ),
+        [WS_METHODS.hardwareErc]: (input) =>
+          requireHardwareWorkspace(input).pipe(
+            Effect.flatMap((workspaceRoot) =>
+              kicadService.erc({ path: input.path, workspaceRoot }),
+            ),
+          ),
+        [WS_METHODS.hardwareDrc]: (input) =>
+          requireHardwareWorkspace(input).pipe(
+            Effect.flatMap((workspaceRoot) =>
+              kicadService.drc({ path: input.path, workspaceRoot }),
+            ),
+          ),
+        [WS_METHODS.hardwareBom]: (input) =>
+          requireHardwareWorkspace(input).pipe(
+            Effect.flatMap((workspaceRoot) =>
+              kicadService.bom({ path: input.path, workspaceRoot }),
+            ),
+          ),
+        [WS_METHODS.hardwareFabExport]: (input) =>
+          requireHardwareWorkspace(input).pipe(
+            Effect.flatMap((workspaceRoot) =>
+              kicadService.fabExport({ path: input.path, workspaceRoot }),
+            ),
+          ),
+        [WS_METHODS.hardwarePinmapSync]: (input) =>
+          requireHardwareWorkspace(input).pipe(
+            Effect.flatMap((workspaceRoot) =>
+              // The project root is two levels above hardware/kicad/<name>.kicad_pro.
+              kicadService.pinmapSync({ path: hardwareProjectRoot(input.path), workspaceRoot }),
+            ),
+          ),
+        [WS_METHODS.hardwareOpenInKicad]: (input) =>
+          requireHardwareWorkspace(input).pipe(
+            Effect.flatMap((workspaceRoot) =>
+              kicadService.openInKicad({ path: input.path, workspaceRoot }),
+            ),
           ),
         [WS_METHODS.hardwareApprovals]: () =>
           hardwareService.approvals.pipe(Stream.map((pending) => ({ pending }))),

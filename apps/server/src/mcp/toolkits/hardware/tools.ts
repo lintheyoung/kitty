@@ -21,6 +21,8 @@ import {
   HardwareSetTargetInput,
   HardwareSetTargetResult,
   HardwareToolError,
+  HardwareProjectNewInput,
+  HardwareProjectNewResult,
   HardwarePinCheckInput,
   HardwarePinCheckResult,
   HardwarePinmapSyncInput,
@@ -39,6 +41,7 @@ import {
   KicadNetlistResult,
   OrchestratorMcpFailure,
 } from "@t3tools/contracts";
+import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import { Tool, Toolkit } from "effect/ai";
@@ -276,6 +279,18 @@ const KicadFabExportTool = Tool.make("kicad_fab_export", {
   .annotate(Tool.Idempotent, true)
   .annotate(Tool.OpenWorld, false);
 
+const HardwareProjectNewTool = Tool.make("hw_hardware_project_new", {
+  description:
+    "Start a new ESP32-S3 hardware project from scratch: a blank KiCad 10 project in hardware/kicad/, an ESP-IDF firmware in firmware/, project.json, hardware/board.json and a .gitignore. Use when the user wants a new board; for firmware only, use hw_project_create.",
+  parameters: HardwareProjectNewInput,
+  success: HardwareProjectNewResult,
+  failure: HardwareFailure,
+  dependencies: [...kicadDependencies, HardwareService.HardwareService, FileSystem.FileSystem],
+})
+  .annotate(Tool.Title, "New hardware project")
+  .annotate(Tool.Destructive, false)
+  .annotate(Tool.OpenWorld, false);
+
 const HardwareProjectInspectTool = Tool.make("hw_project_inspect", {
   description:
     "Start here in a hardware project: finds the KiCad schematic and board, the ESP-IDF firmware, and hardware/board.json, pinmap.json and components.json, with field-level errors and next steps. Returns board.json and pinmap.json when valid.",
@@ -334,6 +349,7 @@ export const HardwareToolkit = Toolkit.make(
   KicadNetlistTool,
   KicadBomTool,
   KicadFabExportTool,
+  HardwareProjectNewTool,
   HardwareProjectInspectTool,
   HardwarePinmapSyncTool,
   HardwarePinCheckTool,

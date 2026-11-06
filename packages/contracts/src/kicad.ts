@@ -382,3 +382,38 @@ export const HardwarePinCheckResult = Schema.Struct({
   firmware_pins: Schema.Array(HardwareFirmwarePin),
 });
 export type HardwarePinCheckResult = typeof HardwarePinCheckResult.Type;
+
+export const HardwareProjectNewInput = Schema.Struct({
+  path: Schema.String.annotate({
+    description: "New hardware project directory, relative to the workspace. Must not exist yet.",
+  }),
+  name: Schema.optional(
+    Schema.String.annotate({
+      description: "Board name, e.g. KeyCAP. Default: the directory name.",
+    }),
+  ),
+});
+export type HardwareProjectNewInput = typeof HardwareProjectNewInput.Type;
+
+export const HardwareProjectNewResult = Schema.Struct({
+  root: Schema.String,
+  schematic: Schema.String,
+  board: Schema.String,
+  firmware: Schema.String,
+  files: Schema.Array(Schema.String),
+  next_steps: Schema.Array(Schema.String),
+});
+export type HardwareProjectNewResult = typeof HardwareProjectNewResult.Type;
+
+/** A KiCad project found in a thread's workspace. */
+export const KicadDesign = Schema.Struct({
+  /** The .kicad_pro, relative to the workspace. */
+  project: Schema.String,
+  name: Schema.String,
+  schematic: Schema.optional(Schema.String),
+  board: Schema.optional(Schema.String),
+});
+export type KicadDesign = typeof KicadDesign.Type;
+
+export const KicadDesignsResult = Schema.Struct({ designs: Schema.Array(KicadDesign) });
+export type KicadDesignsResult = typeof KicadDesignsResult.Type;

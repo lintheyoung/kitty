@@ -6,6 +6,7 @@ import { useEnvironmentQuery } from "../../state/query";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { HardwareApprovalRequests, HardwareBoards } from "./HardwareBoards";
+import { HardwareDesigns } from "./HardwareDesigns";
 import { HardwareProjects } from "./HardwareProjects";
 import { ToolchainInstall } from "./ToolchainInstall";
 
@@ -104,7 +105,10 @@ export function HardwarePanel(props: {
         ) : null}
         <HardwareBoards environmentId={props.threadRef.environmentId} />
         {props.projectId === null ? null : (
-          <HardwareProjects threadRef={props.threadRef} projectId={props.projectId} />
+          <>
+            <HardwareDesigns threadRef={props.threadRef} projectId={props.projectId} />
+            <HardwareProjects threadRef={props.threadRef} projectId={props.projectId} />
+          </>
         )}
       </div>
     </div>

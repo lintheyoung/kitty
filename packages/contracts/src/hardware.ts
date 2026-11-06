@@ -477,3 +477,17 @@ export const HardwareToolchainInstallEvent = Schema.Union([
   Schema.Struct({ type: Schema.Literal("complete"), result: HardwareToolchainInstallResult }),
 ]);
 export type HardwareToolchainInstallEvent = typeof HardwareToolchainInstallEvent.Type;
+
+/** Panel actions on a KiCad project; `path` is its .kicad_pro, relative to the workspace. */
+export const HardwareDesignInput = Schema.Struct({
+  ...HardwareWorkspaceTarget,
+  path: Schema.String,
+});
+export type HardwareDesignInput = typeof HardwareDesignInput.Type;
+
+export const HardwareNewProjectInput = Schema.Struct({
+  ...HardwareWorkspaceTarget,
+  path: Schema.String,
+  name: Schema.optional(Schema.String),
+});
+export type HardwareNewProjectInput = typeof HardwareNewProjectInput.Type;

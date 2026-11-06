@@ -324,10 +324,21 @@ import {
   HardwareProjectFlashInput,
   HardwareProjectsInput,
   HardwareProjectsResult,
+  HardwareDesignInput,
+  HardwareNewProjectInput,
   HardwareToolchainInstallEvent,
   HardwareToolchainInstallInput,
   HardwareToolError,
 } from "./hardware.ts";
+import {
+  HardwareProjectNewResult,
+  KicadBomResult,
+  KicadDesignsResult,
+  KicadDrcResult,
+  KicadErcResult,
+  KicadFabExportResult,
+  HardwarePinmapSyncResult,
+} from "./kicad.ts";
 import {
   ServerConfigStreamEvent,
   DesktopUpdateCommitInput,
@@ -517,6 +528,14 @@ export const WS_METHODS = {
   hardwareApprovals: "hardware.approvals",
   hardwareApprovalRespond: "hardware.approvalRespond",
   hardwareToolchainInstall: "hardware.toolchainInstall",
+  hardwareNewProject: "hardware.newProject",
+  hardwareDesigns: "hardware.designs",
+  hardwareErc: "hardware.erc",
+  hardwareDrc: "hardware.drc",
+  hardwareBom: "hardware.bom",
+  hardwareFabExport: "hardware.fabExport",
+  hardwarePinmapSync: "hardware.pinmapSync",
+  hardwareOpenInKicad: "hardware.openInKicad",
   deviceTestHost: "device.testHost",
   deviceEasAccount: "device.easAccount",
   deviceSimlockIdentity: "device.simlockIdentity",
@@ -1768,6 +1787,54 @@ const WsHardwareToolchainInstallRpc = Rpc.make(WS_METHODS.hardwareToolchainInsta
   stream: true,
 });
 
+const WsHardwareNewProjectRpc = Rpc.make(WS_METHODS.hardwareNewProject, {
+  payload: HardwareNewProjectInput,
+  success: HardwareProjectNewResult,
+  error: Schema.Union([HardwareToolError, EnvironmentAuthorizationError]),
+});
+
+const WsHardwareDesignsRpc = Rpc.make(WS_METHODS.hardwareDesigns, {
+  payload: HardwareProjectsInput,
+  success: KicadDesignsResult,
+  error: Schema.Union([HardwareToolError, EnvironmentAuthorizationError]),
+});
+
+const WsHardwareErcRpc = Rpc.make(WS_METHODS.hardwareErc, {
+  payload: HardwareDesignInput,
+  success: KicadErcResult,
+  error: Schema.Union([HardwareToolError, EnvironmentAuthorizationError]),
+});
+
+const WsHardwareDrcRpc = Rpc.make(WS_METHODS.hardwareDrc, {
+  payload: HardwareDesignInput,
+  success: KicadDrcResult,
+  error: Schema.Union([HardwareToolError, EnvironmentAuthorizationError]),
+});
+
+const WsHardwareBomRpc = Rpc.make(WS_METHODS.hardwareBom, {
+  payload: HardwareDesignInput,
+  success: KicadBomResult,
+  error: Schema.Union([HardwareToolError, EnvironmentAuthorizationError]),
+});
+
+const WsHardwareFabExportRpc = Rpc.make(WS_METHODS.hardwareFabExport, {
+  payload: HardwareDesignInput,
+  success: KicadFabExportResult,
+  error: Schema.Union([HardwareToolError, EnvironmentAuthorizationError]),
+});
+
+const WsHardwarePinmapSyncRpc = Rpc.make(WS_METHODS.hardwarePinmapSync, {
+  payload: HardwareDesignInput,
+  success: HardwarePinmapSyncResult,
+  error: Schema.Union([HardwareToolError, EnvironmentAuthorizationError]),
+});
+
+const WsHardwareOpenInKicadRpc = Rpc.make(WS_METHODS.hardwareOpenInKicad, {
+  payload: HardwareDesignInput,
+  success: Schema.Struct({ opened: Schema.String }),
+  error: Schema.Union([HardwareToolError, EnvironmentAuthorizationError]),
+});
+
 const WsDeviceConfigureRpc = Rpc.make(WS_METHODS.deviceConfigure, {
   payload: DeviceConfigureInput,
   success: DeviceServiceState,
@@ -2270,6 +2337,14 @@ export const WsRpcGroup = RpcGroup.make(
   WsHardwareApprovalsRpc,
   WsHardwareApprovalRespondRpc,
   WsHardwareToolchainInstallRpc,
+  WsHardwareNewProjectRpc,
+  WsHardwareDesignsRpc,
+  WsHardwareErcRpc,
+  WsHardwareDrcRpc,
+  WsHardwareBomRpc,
+  WsHardwareFabExportRpc,
+  WsHardwarePinmapSyncRpc,
+  WsHardwareOpenInKicadRpc,
   WsDeviceTestHostRpc,
   WsDeviceEasAccountRpc,
   WsDeviceSimlockIdentityRpc,

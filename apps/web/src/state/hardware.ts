@@ -175,3 +175,40 @@ export const hardwareApprovalRespond = createEnvironmentRpcCommand(connectionAto
   label: "environment-data:hardware:approval-respond",
   tag: WS_METHODS.hardwareApprovalRespond,
 });
+
+/** KiCad projects in a thread's workspace. */
+export const hardwareDesigns = createEnvironmentRpcQueryAtomFamily(connectionAtomRuntime, {
+  label: "environment-data:hardware:designs",
+  tag: WS_METHODS.hardwareDesigns,
+  staleTimeMs: 10_000,
+  idleTtlMs: 5 * 60_000,
+});
+
+export const hardwareNewProject = createEnvironmentRpcCommand(connectionAtomRuntime, {
+  label: "environment-data:hardware:new-project",
+  tag: WS_METHODS.hardwareNewProject,
+});
+export const hardwareErc = createEnvironmentRpcCommand(connectionAtomRuntime, {
+  label: "environment-data:hardware:erc",
+  tag: WS_METHODS.hardwareErc,
+});
+export const hardwareDrc = createEnvironmentRpcCommand(connectionAtomRuntime, {
+  label: "environment-data:hardware:drc",
+  tag: WS_METHODS.hardwareDrc,
+});
+export const hardwareBom = createEnvironmentRpcCommand(connectionAtomRuntime, {
+  label: "environment-data:hardware:bom",
+  tag: WS_METHODS.hardwareBom,
+});
+export const hardwareFabExport = createEnvironmentRpcCommand(connectionAtomRuntime, {
+  label: "environment-data:hardware:fab-export",
+  tag: WS_METHODS.hardwareFabExport,
+});
+export const hardwarePinmapSync = createEnvironmentRpcCommand(connectionAtomRuntime, {
+  label: "environment-data:hardware:pinmap-sync",
+  tag: WS_METHODS.hardwarePinmapSync,
+});
+export const hardwareOpenInKicad = createEnvironmentRpcCommand(connectionAtomRuntime, {
+  label: "environment-data:hardware:open-in-kicad",
+  tag: WS_METHODS.hardwareOpenInKicad,
+});

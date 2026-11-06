@@ -826,7 +826,7 @@ export const make = Effect.fn("HardwareService.make")(function* () {
       .copy(source, input.directory)
       .pipe(Effect.mapError(fail(`Could not copy the ${template} template`)));
     // Example test harnesses are noise in a new project.
-    for (const extra of ["pytest_hello_world.py", "pytest_blink.py"]) {
+    for (const extra of ["pytest_hello_world.py", "pytest_blink.py", "sdkconfig.ci"]) {
       yield* fs.remove(path.join(input.directory, extra)).pipe(Effect.ignore);
     }
     if (input.flashSize) {

@@ -17,6 +17,8 @@ import {
   type HardwareProjectInspectInput,
   type HardwareProjectInspectResult,
   type KittyFileReport,
+  type KicadDesign,
+  type KicadDesignsResult,
   KittyBoard,
   KittyComponents,
   KittyPinmap,
@@ -50,6 +52,7 @@ import {
   schematicPins,
 } from "./projectModel.ts";
 import { parseIdfProjectName, parseKicadCliVersion } from "./toolchainVersions.ts";
+import { blankBoard, blankProject, blankSchematic } from "./kicadBlank.ts";
 import { resolveInWorkspace } from "./workspacePath.ts";
 
 type InWorkspace<A> = A & { readonly workspaceRoot: string };
@@ -84,6 +87,18 @@ export class KicadService extends Context.Service<
     readonly pinmapSync: (
       input: InWorkspace<HardwarePinmapSyncInput>,
     ) => Effect.Effect<HardwarePinmapSyncResult, HardwareToolError>;
+    /** KiCad projects up to four levels below `workspaceRoot`. */
+    readonly listDesigns: (workspaceRoot: string) => Effect.Effect<KicadDesignsResult>;
+    /** Opens a .kicad_pro in the KiCad app. */
+    readonly openInKicad: (
+      input: InWorkspace<{ readonly path: string }>,
+    ) => Effect.Effect<{ readonly opened: string }, HardwareToolError>;
+    /** Writes a blank KiCad project `<directory>/<fileStem>.kicad_*` in KiCad's current format. */
+    readonly createBlankDesign: (
+      directory: string,
+      fileStem: string,
+      title: string,
+    ) => Effect.Effect<ReadonlyArray<string>, HardwareToolError>;
     /** Checks firmware pins and pinmap.json against the schematic. */
     readonly pinCheck: (
       input: InWorkspace<HardwarePinCheckInput>,
@@ -200,6 +215,16 @@ export const make = Effect.fn("KicadService.make")(function* () {
       const chosen =
         (stem && matches.find((entry) => entry === `${stem}${extension}`)) ?? matches[0];
       if (chosen && (stem || matches.length === 1)) file = path.join(target, chosen);
+      if (!file) {
+        // A hardware project root: its design sits in hardware/ (e.g. hardware/kicad/).
+        const nested = (yield* walk(target, 3)).filter((entry) => entry.endsWith(extension));
+        const projects = (yield* walk(target, 3)).filter((entry) => entry.endsWith(".kicad_pro"));
+        const paired = nested.filter((entry) =>
+          projects.includes(`${entry.slice(0, -extension.length)}.kicad_pro`),
+        );
+        const only = paired.length === 1 ? paired[0] : nested.length === 1 ? nested[0] : undefined;
+        if (only) file = path.join(target, only);
+      }
     } else if (target.endsWith(extension)) {
       file = target;
     } else if (target.endsWith(".kicad_pro")) {
@@ -709,7 +734,85 @@ export const make = Effect.fn("KicadService.make")(function* () {
     } satisfies HardwarePinCheckResult;
   });
 
+  const createBlankDesign = Effect.fn("KicadService.createBlankDesign")(function* (
+    directory: string,
+    fileStem: string,
+    title: string,
+  ) {
+    yield* fs
+      .makeDirectory(directory, { recursive: true })
+      .pipe(Effect.mapError((cause) => failure("command_failed", cause.message)));
+    const files = {
+      pro: path.join(directory, `${fileStem}.kicad_pro`),
+      sch: path.join(directory, `${fileStem}.kicad_sch`),
+      pcb: path.join(directory, `${fileStem}.kicad_pcb`),
+    };
+    const write = (file: string, text: string) =>
+      fs
+        .writeFileString(file, text)
+        .pipe(Effect.mapError((cause) => failure("command_failed", cause.message)));
+    yield* write(files.pro, blankProject(path.basename(files.pro)));
+    yield* write(files.sch, blankSchematic(title));
+    yield* write(files.pcb, blankBoard(title));
+    // Let KiCad rewrite both in its own format; without kicad-cli the files still open.
+    const cli = yield* findCli().pipe(Effect.option);
+    if (Option.isSome(cli)) {
+      yield* runCli(cli.value, ["sch", "upgrade", "--force", files.sch], directory);
+      yield* runCli(cli.value, ["pcb", "upgrade", "--force", files.pcb], directory);
+    }
+    return [files.pro, files.sch, files.pcb];
+  });
+
+  const listDesigns = Effect.fn("KicadService.listDesigns")(function* (workspaceRoot: string) {
+    const files = yield* walk(workspaceRoot, 4).pipe(
+      Effect.orElseSucceed((): ReadonlyArray<string> => []),
+    );
+    const designs = files
+      .filter((file) => file.endsWith(".kicad_pro"))
+      .map((project): KicadDesign => {
+        const stem = project.slice(0, -".kicad_pro".length);
+        const schematic = files.includes(`${stem}.kicad_sch`) ? `${stem}.kicad_sch` : undefined;
+        const board = files.includes(`${stem}.kicad_pcb`) ? `${stem}.kicad_pcb` : undefined;
+        return {
+          project,
+          name: path.basename(stem),
+          ...(schematic ? { schematic } : {}),
+          ...(board ? { board } : {}),
+        };
+      });
+    return { designs } satisfies KicadDesignsResult;
+  });
+
+  const openInKicad = Effect.fn("KicadService.openInKicad")(function* (
+    input: InWorkspace<{ readonly path: string }>,
+  ) {
+    const file = yield* confine(input.workspaceRoot, input.path);
+    if (
+      !file.endsWith(".kicad_pro") ||
+      !(yield* fs.exists(file).pipe(Effect.orElseSucceed(() => false)))
+    ) {
+      return yield* failure("invalid_path", `${input.path} is not a KiCad project.`);
+    }
+    const platform = yield* HostProcess.Platform;
+    const command =
+      platform === "darwin"
+        ? { command: "open", args: [file] }
+        : platform === "win32"
+          ? { command: "cmd", args: ["/c", "start", "", file] }
+          : { command: "xdg-open", args: [file] };
+    const result = yield* processRunner
+      .run({ ...command, timeout: "30 seconds" })
+      .pipe(Effect.mapError((cause) => failure("command_failed", cause.message)));
+    if (result.code !== 0) {
+      return yield* failure("command_failed", `Could not open KiCad. ${logTail(result.stderr, 4)}`);
+    }
+    return { opened: input.path };
+  });
+
   return KicadService.of({
+    listDesigns,
+    openInKicad,
+    createBlankDesign,
     erc,
     drc,
     netlist,
