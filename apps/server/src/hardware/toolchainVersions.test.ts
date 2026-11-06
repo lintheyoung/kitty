@@ -4,7 +4,7 @@ import {
   classifyIdfVersion,
   classifyKicadVersion,
   matchesIdfPythonEnv,
-  parseEimInstallPaths,
+  parseEimInstalls,
   parseIdfProjectName,
   parseIdfVersionCmake,
   parseKicadCliVersion,
@@ -99,23 +99,36 @@ describe("ESP-IDF project files", () => {
   });
 });
 
-describe("parseEimInstallPaths", () => {
-  it("lists the checkouts EIM recorded", () => {
+describe("parseEimInstalls", () => {
+  it("lists the installs EIM recorded with their Python and activation script", () => {
     const record = JSON.stringify({
       gitPath: "/usr/bin/git",
       idfInstalled: [
         { id: "a", name: "ESP-IDF v5.4.2", path: "/Users/u/esp/esp-idf", python: "/x/python" },
-        { id: "b", name: "ESP-IDF v5.5.5", path: "/opt/esp/v5.5/esp-idf" },
+        {
+          id: "b",
+          name: "v5.5.5",
+          path: "/opt/esp/v5.5/esp-idf",
+          python: "/h/.espressif/tools/python/v5.5.5/venv/bin/python",
+          activationScript: "/h/.espressif/tools/activate_idf_v5.5.5.sh",
+        },
         { id: "c" },
       ],
       idfSelectedId: "a",
     });
-    expect(parseEimInstallPaths(record)).toEqual(["/Users/u/esp/esp-idf", "/opt/esp/v5.5/esp-idf"]);
+    expect(parseEimInstalls(record)).toEqual([
+      { path: "/Users/u/esp/esp-idf", python: "/x/python" },
+      {
+        path: "/opt/esp/v5.5/esp-idf",
+        python: "/h/.espressif/tools/python/v5.5.5/venv/bin/python",
+        activationScript: "/h/.espressif/tools/activate_idf_v5.5.5.sh",
+      },
+    ]);
   });
 
   it("ignores a missing or broken record", () => {
-    expect(parseEimInstallPaths("")).toEqual([]);
-    expect(parseEimInstallPaths("{not json")).toEqual([]);
-    expect(parseEimInstallPaths('{"idfInstalled": "nope"}')).toEqual([]);
+    expect(parseEimInstalls("")).toEqual([]);
+    expect(parseEimInstalls("{not json")).toEqual([]);
+    expect(parseEimInstalls('{"idfInstalled": "nope"}')).toEqual([]);
   });
 });

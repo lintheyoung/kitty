@@ -453,3 +453,27 @@ export const HardwareApprovalRespondInput = Schema.Struct({
   allow: Schema.Boolean,
 });
 export type HardwareApprovalRespondInput = typeof HardwareApprovalRespondInput.Type;
+
+export const HardwareToolchainMirror = Schema.Literals(["global", "china"]);
+export type HardwareToolchainMirror = typeof HardwareToolchainMirror.Type;
+
+/** Installs Kitty's ESP-IDF through Espressif's installer (EIM). */
+export const HardwareToolchainInstallInput = Schema.Struct({
+  /** `china` uses Espressif's China mirrors (dl.espressif.cn, Gitee, Aliyun PyPI). */
+  mirror: Schema.optional(HardwareToolchainMirror),
+});
+export type HardwareToolchainInstallInput = typeof HardwareToolchainInstallInput.Type;
+
+export const HardwareToolchainInstallResult = Schema.Struct({
+  ok: Schema.Boolean,
+  idfVersion: Schema.String,
+  durationMs: Schema.Int,
+  logTail: Schema.String,
+});
+export type HardwareToolchainInstallResult = typeof HardwareToolchainInstallResult.Type;
+
+export const HardwareToolchainInstallEvent = Schema.Union([
+  Schema.Struct({ type: Schema.Literal("output"), text: Schema.String }),
+  Schema.Struct({ type: Schema.Literal("complete"), result: HardwareToolchainInstallResult }),
+]);
+export type HardwareToolchainInstallEvent = typeof HardwareToolchainInstallEvent.Type;

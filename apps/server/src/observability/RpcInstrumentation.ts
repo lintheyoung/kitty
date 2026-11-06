@@ -221,6 +221,7 @@ const RPC_AGGREGATES = {
   [WS_METHODS.hardwareMonitor]: "hardware",
   [WS_METHODS.hardwareApprovals]: "hardware",
   [WS_METHODS.hardwareApprovalRespond]: "hardware",
+  [WS_METHODS.hardwareToolchainInstall]: "hardware",
   [WS_METHODS.deviceOpen]: "device",
   [WS_METHODS.deviceClose]: "device",
   [WS_METHODS.deviceShutdown]: "device",

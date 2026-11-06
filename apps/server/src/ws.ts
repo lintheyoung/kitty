@@ -2,6 +2,7 @@ import {
   type HardwareBuildEvent,
   type HardwareFlashEvent,
   type HardwareMonitorEvent,
+  type HardwareToolchainInstallEvent,
   HardwareToolError,
   OrchestrationDispatchCommandError,
 } from "@t3tools/contracts";
@@ -3264,6 +3265,19 @@ export const layerWsRpc = (
                 Queue.offerUnsafe(queue, event);
               })
               .pipe(
+                Effect.catch((error) => Queue.fail(queue, error)),
+                Effect.andThen(Queue.end(queue)),
+                Effect.forkScoped,
+              ),
+          ),
+        [WS_METHODS.hardwareToolchainInstall]: (input) =>
+          Stream.callback<HardwareToolchainInstallEvent, HardwareToolError>((queue) =>
+            hardwareService
+              .installToolchain(input, (text) => {
+                Queue.offerUnsafe(queue, { type: "output", text });
+              })
+              .pipe(
+                Effect.flatMap((result) => Queue.offer(queue, { type: "complete", result })),
                 Effect.catch((error) => Queue.fail(queue, error)),
                 Effect.andThen(Queue.end(queue)),
                 Effect.forkScoped,

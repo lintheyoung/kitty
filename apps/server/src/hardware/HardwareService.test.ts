@@ -559,3 +559,57 @@ it.effect("stops reading the serial log once `until` matches", () =>
     assert.equal(result.port, BOARD_PORT);
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
+
+it.effect("downloads EIM once, then runs it to install ESP-IDF", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const home = yield* fs.makeTempDirectoryScoped({ prefix: "kitty-eim-" });
+    const calls: Array<{ command: string; args: ReadonlyArray<string> }> = [];
+    const runner = (input: ProcessRunner.ProcessRunInput) =>
+      Effect.gen(function* () {
+        calls.push({ command: input.command, args: input.args });
+        if (input.command === "unzip") {
+          // Unpacking yields the eim binary next to the archive.
+          const directory = input.args[input.args.indexOf("-d") + 1] ?? "";
+          yield* fs.writeFileString(path.join(directory, "eim"), "#!/bin/sh\n").pipe(Effect.orDie);
+        }
+        if (input.args.includes("install")) {
+          input.onStdoutChunk?.(new TextEncoder().encode("INFO - Installing ESP-IDF v5.5.5\n"));
+          return output("Successfully installed IDF");
+        }
+        return output("");
+      });
+    const install = Effect.gen(function* () {
+      const service = yield* HardwareService.make();
+      const log: Array<string> = [];
+      const result = yield* service.installToolchain({ mirror: "china" }, (text) => log.push(text));
+      return { result, log };
+    }).pipe(
+      Effect.provideService(
+        ProcessRunner.ProcessRunner,
+        ProcessRunner.ProcessRunner.of({ run: runner }),
+      ),
+      Effect.provideService(HostProcess.HomeDirectory, home),
+      Effect.provideService(HostProcess.Environment, {}),
+      Effect.provideService(HostProcess.Platform, "darwin"),
+      Effect.provideService(HostProcess.Architecture, "arm64"),
+    );
+    const first = yield* install;
+    assert.isTrue(first.result.ok);
+    assert.isTrue(first.log.some((text) => text.includes("Installing ESP-IDF v5.5.5")));
+    assert.deepStrictEqual(
+      calls.map((call) => (call.command === "/bin/bash" ? "eim" : call.command)),
+      ["curl", "unzip", "eim"],
+    );
+    assert.include(calls[0]?.args.at(-1) ?? "", "eim-cli-macos-aarch64.zip");
+    assert.include(calls[2]?.args ?? [], "https://dl.espressif.cn/github_assets");
+
+    calls.length = 0;
+    yield* install;
+    assert.deepStrictEqual(
+      calls.map((call) => (call.command === "/bin/bash" ? "eim" : call.command)),
+      ["eim"],
+    );
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);

@@ -78,23 +78,38 @@ export function parseSdkconfigTarget(sdkconfig: string): string | undefined {
   return /^CONFIG_IDF_TARGET="([^"]+)"/m.exec(sdkconfig)?.[1];
 }
 
-/** ESP-IDF checkouts listed in EIM's `eim_idf.json`; anything unreadable lists none. */
-export function parseEimInstallPaths(json: string): ReadonlyArray<string> {
+export interface EimInstall {
+  readonly path: string;
+  /** The install's own venv Python (EIM keeps it under tools/python/<version>/venv). */
+  readonly python?: string;
+  /** Script that sets up the install's environment, used instead of export.sh. */
+  readonly activationScript?: string;
+}
+
+/** ESP-IDF installs listed in EIM's `eim_idf.json`; anything unreadable lists none. */
+export function parseEimInstalls(json: string): ReadonlyArray<EimInstall> {
+  let record: unknown;
   try {
-    const record: unknown = JSON.parse(json);
-    if (typeof record !== "object" || record === null || !("idfInstalled" in record)) return [];
-    const installed = record.idfInstalled;
-    if (!Array.isArray(installed)) return [];
-    return installed.flatMap((entry: unknown) =>
-      typeof entry === "object" &&
-      entry !== null &&
-      "path" in entry &&
-      typeof entry.path === "string" &&
-      entry.path.length > 0
-        ? [entry.path]
-        : [],
-    );
+    record = JSON.parse(json);
   } catch {
     return [];
   }
+  if (typeof record !== "object" || record === null || !("idfInstalled" in record)) return [];
+  const installed = record.idfInstalled;
+  if (!Array.isArray(installed)) return [];
+  const text = (entry: Record<string, unknown>, key: string) => {
+    const value = entry[key];
+    return typeof value === "string" && value.length > 0 ? value : undefined;
+  };
+  return installed.flatMap((raw: unknown) => {
+    if (typeof raw !== "object" || raw === null) return [];
+    const entry = raw as Record<string, unknown>;
+    const path = text(entry, "path");
+    if (!path) return [];
+    const python = text(entry, "python");
+    const activationScript = text(entry, "activationScript");
+    return [
+      { path, ...(python ? { python } : {}), ...(activationScript ? { activationScript } : {}) },
+    ];
+  });
 }

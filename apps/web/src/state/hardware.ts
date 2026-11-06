@@ -13,6 +13,7 @@ import {
   type EnvironmentId,
   type HardwareProjectBuildInput,
   type HardwareProjectFlashInput,
+  type HardwareToolchainInstallInput,
   HardwareToolError,
   WS_METHODS,
 } from "@t3tools/contracts";
@@ -100,6 +101,22 @@ export const hardwareFlash = createRuntimeCommand(connectionAtomRuntime, {
       runStream(WS_METHODS.hardwareFlash, input.input),
       input.onOutput,
       "flash",
+    ),
+});
+
+/** Installs Kitty's ESP-IDF with Espressif's installer, streaming its log. */
+export const hardwareToolchainInstall = createRuntimeCommand(connectionAtomRuntime, {
+  label: "environment-data:hardware:toolchain-install",
+  execute: (input: {
+    readonly environmentId: EnvironmentId;
+    readonly input: HardwareToolchainInstallInput;
+    readonly onOutput: (text: string) => void;
+  }) =>
+    runWithOutput(
+      input.environmentId,
+      runStream(WS_METHODS.hardwareToolchainInstall, input.input),
+      input.onOutput,
+      "install",
     ),
 });
 

@@ -7,6 +7,7 @@ import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { HardwareApprovalRequests, HardwareBoards } from "./HardwareBoards";
 import { HardwareProjects } from "./HardwareProjects";
+import { ToolchainInstall } from "./ToolchainInstall";
 
 const CHECK_LABELS: Record<HardwareDoctorCheck["id"], string> = {
   "esp-idf": "ESP-IDF",
@@ -92,6 +93,15 @@ export function HardwarePanel(props: {
             </ul>
           </>
         )}
+        {report?.checks.some(
+          (check) =>
+            (check.id === "esp-idf" || check.id === "python-env") && check.status === "missing",
+        ) ? (
+          <ToolchainInstall
+            environmentId={props.threadRef.environmentId}
+            onInstalled={() => query.refresh()}
+          />
+        ) : null}
         <HardwareBoards environmentId={props.threadRef.environmentId} />
         {props.projectId === null ? null : (
           <HardwareProjects threadRef={props.threadRef} projectId={props.projectId} />

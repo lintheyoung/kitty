@@ -81,7 +81,8 @@ export type EnvironmentStreamCommandRpcTag =
   | typeof WS_METHODS.serverUpdateServerWithProgress
   | typeof WS_METHODS.gitRunStackedAction
   | typeof WS_METHODS.hardwareBuild
-  | typeof WS_METHODS.hardwareFlash;
+  | typeof WS_METHODS.hardwareFlash
+  | typeof WS_METHODS.hardwareToolchainInstall;
 
 export type EnvironmentStreamRpcTag =
   | EnvironmentSubscriptionRpcTag

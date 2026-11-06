@@ -29,6 +29,8 @@ import {
   type HardwareResetInput,
   type HardwareResetResult,
   type HardwareApproval,
+  type HardwareToolchainInstallInput,
+  type HardwareToolchainInstallResult,
   HardwareToolError,
   type ThreadId,
 } from "@t3tools/contracts";
@@ -52,6 +54,13 @@ import { parseEsptoolChipInfo } from "./esptoolOutput.ts";
 import { makeHardwareApprovals } from "./hardwareApprovals.ts";
 import { kicadCliCandidates } from "./KicadService.ts";
 import { makeSerialLeases } from "./serialLeases.ts";
+import {
+  EIM_VERSION,
+  eimAsset,
+  eimDownloadUrl,
+  eimInstallArgs,
+  KITTY_IDF_RELEASE,
+} from "./toolchainInstall.ts";
 import { LIST_PORTS_SCRIPT, MONITOR_SCRIPT, monitorTail, parsePortList } from "./serialPorts.ts";
 import {
   applySdkconfigUpdates,
@@ -69,7 +78,8 @@ import {
   compareVersions,
   formatVersion,
   matchesIdfPythonEnv,
-  parseEimInstallPaths,
+  type EimInstall,
+  parseEimInstalls,
   parseIdfProjectName,
   parseIdfVersionCmake,
   parseKicadCliVersion,
@@ -123,6 +133,17 @@ export class HardwareService extends Context.Service<
         readonly approvalFor?: { readonly threadId?: ThreadId | undefined } | undefined;
       },
     ) => Effect.Effect<HardwareFlashResult, HardwareToolError>;
+    /**
+     * Installs Kitty's ESP-IDF with Espressif's installer (EIM), downloading
+     * EIM first. `basePath` / `registryDir` redirect the install (tests).
+     */
+    readonly installToolchain: (
+      input: HardwareToolchainInstallInput & {
+        readonly basePath?: string | undefined;
+        readonly registryDir?: string | undefined;
+      },
+      onOutput: (text: string) => void,
+    ) => Effect.Effect<HardwareToolchainInstallResult, HardwareToolError>;
     /** Agent flashes waiting for the user's answer. */
     readonly approvals: Stream.Stream<ReadonlyArray<HardwareApproval>>;
     readonly respondApproval: (id: string, allow: boolean) => Effect.Effect<boolean>;
@@ -162,6 +183,8 @@ function flashSizeBytes(size: string | undefined): number | undefined {
 interface FoundIdf {
   readonly path: string;
   readonly version: Version;
+  /** Set for installs made by Espressif's installer, which use their own layout. */
+  readonly eim?: EimInstall | undefined;
 }
 
 export const make = Effect.fn("HardwareService.make")(function* () {
@@ -197,7 +220,11 @@ export const make = Effect.fn("HardwareService.make")(function* () {
     const eimRecord = yield* fs
       .readFileString(path.join(home, ".espressif", "tools", "eim_idf.json"))
       .pipe(Effect.orElseSucceed(() => ""));
-    for (const recorded of parseEimInstallPaths(eimRecord)) candidates.add(path.resolve(recorded));
+    const eimInstalls = new Map<string, EimInstall>();
+    for (const install of parseEimInstalls(eimRecord)) {
+      eimInstalls.set(path.resolve(install.path), install);
+      candidates.add(path.resolve(install.path));
+    }
     const espDir = path.join(home, "esp");
     for (const name of yield* readDirectory(espDir)) candidates.add(path.join(espDir, name));
     const espressifDir = path.join(home, ".espressif");
@@ -207,7 +234,7 @@ export const make = Effect.fn("HardwareService.make")(function* () {
     const found: Array<FoundIdf> = [];
     for (const candidate of candidates) {
       const idf = yield* readIdf(candidate);
-      if (Option.isSome(idf)) found.push(idf.value);
+      if (Option.isSome(idf)) found.push({ ...idf.value, eim: eimInstalls.get(candidate) });
     }
     return found;
   });
@@ -217,7 +244,7 @@ export const make = Effect.fn("HardwareService.make")(function* () {
       return {
         id: "esp-idf",
         status: "missing",
-        detail: `ESP-IDF not found. Install v${pinnedIdf} (https://docs.espressif.com/projects/esp-idf/en/stable/esp32s3/get-started/).`,
+        detail: `ESP-IDF not found. Install it with one click in Kitty's Hardware panel, or by hand: v${pinnedIdf} (https://docs.espressif.com/projects/esp-idf/en/stable/esp32s3/get-started/).`,
       };
     }
     const status = classifyIdfVersion(selected.version);
@@ -247,6 +274,18 @@ export const make = Effect.fn("HardwareService.make")(function* () {
           detail: "Needs ESP-IDF first.",
         } satisfies HardwareDoctorCheck,
         bin: undefined,
+      };
+    }
+    const eimPython = idf.eim?.python;
+    if (eimPython && (yield* exists(eimPython))) {
+      return {
+        python: {
+          id: "python-env",
+          status: "ok",
+          path: path.dirname(path.dirname(eimPython)),
+          detail: "ESP-IDF Python environment is installed.",
+        } satisfies HardwareDoctorCheck,
+        bin: path.dirname(eimPython),
       };
     }
     const envsDir = path.join(home, ".espressif", "python_env");
@@ -413,14 +452,20 @@ export const make = Effect.fn("HardwareService.make")(function* () {
       .run({
         command: "/bin/bash",
         // stderr joins stdout so live output keeps compiler errors in order.
+        // EIM installs come with their own activation script; others use export.sh.
         args: [
           "-c",
-          '. "$IDF_PATH/export.sh" >/dev/null 2>&1 && exec idf.py "$@" 2>&1',
-          "idf.py",
+          '. "$KITTY_IDF_ACTIVATE" >/dev/null 2>&1 && exec idf.py "$@" 2>&1',
+          // $0 must look like a shell: EIM's script refuses to run when it thinks it was executed.
+          "bash",
           ...args,
         ],
         cwd,
-        env: { ...env, IDF_PATH: idf.path },
+        env: {
+          ...env,
+          IDF_PATH: idf.path,
+          KITTY_IDF_ACTIVATE: idf.eim?.activationScript ?? path.join(idf.path, "export.sh"),
+        },
         timeout,
         ...(onOutput ? { onStdoutChunk: utf8Chunks(onOutput) } : {}),
         outputMode: "truncate",
@@ -1041,6 +1086,121 @@ export const make = Effect.fn("HardwareService.make")(function* () {
     } satisfies HardwareSdkconfigSetResult;
   });
 
+  let installing = false;
+
+  /** EIM for this machine under ~/.kitty/tools, downloaded on first use. */
+  const ensureEim = Effect.fn("HardwareService.ensureEim")(function* (
+    onOutput: (text: string) => void,
+  ) {
+    const home = yield* HostProcess.HomeDirectory;
+    const platform = yield* HostProcess.Platform;
+    const arch = yield* HostProcess.Architecture;
+    const asset = eimAsset(platform, arch);
+    if (!asset) {
+      return yield* failure(
+        "toolchain_missing",
+        `Espressif's installer has no build for ${platform}/${arch}. Install ESP-IDF ${KITTY_IDF_RELEASE} by hand.`,
+      );
+    }
+    const directory = path.join(home, KITTY_HOME_DIRNAME, "tools", `eim-${EIM_VERSION}`);
+    const eim = path.join(directory, platform === "win32" ? "eim.exe" : "eim");
+    if (yield* exists(eim)) return { eim, directory };
+    yield* fs
+      .makeDirectory(directory, { recursive: true })
+      .pipe(Effect.mapError((cause) => failure("command_failed", cause.message)));
+    const download = path.join(directory, asset.name);
+    onOutput(`Downloading Espressif's installer (EIM ${EIM_VERSION})…\n`);
+    const fetched = yield* processRunner
+      .run({
+        command: "curl",
+        args: [
+          "-fL",
+          "--retry",
+          "3",
+          "--silent",
+          "--show-error",
+          "-o",
+          download,
+          eimDownloadUrl(asset.name),
+        ],
+        timeout: "10 minutes",
+        timeoutBehavior: "timedOutResult",
+      })
+      .pipe(Effect.mapError((cause) => failure("command_failed", cause.message)));
+    if (fetched.code !== 0 || fetched.timedOut) {
+      return yield* commandFailed("Downloading EIM", fetched);
+    }
+    if (asset.archive === "zip") {
+      const unzipped = yield* processRunner
+        .run({
+          command: "unzip",
+          args: ["-o", "-q", download, "-d", directory],
+          timeout: "2 minutes",
+        })
+        .pipe(Effect.mapError((cause) => failure("command_failed", cause.message)));
+      if (unzipped.code !== 0) return yield* commandFailed("Unpacking EIM", unzipped);
+      yield* fs.remove(download).pipe(Effect.ignore);
+    } else {
+      yield* fs
+        .rename(download, eim)
+        .pipe(Effect.mapError((cause) => failure("command_failed", cause.message)));
+    }
+    if (platform !== "win32") {
+      yield* fs.chmod(eim, 0o755).pipe(Effect.ignore);
+    }
+    if (!(yield* exists(eim))) {
+      return yield* failure(
+        "command_failed",
+        `The EIM download did not contain ${path.basename(eim)}.`,
+      );
+    }
+    return { eim, directory };
+  });
+
+  const installToolchain = Effect.fn("HardwareService.installToolchain")(function* (
+    input: HardwareToolchainInstallInput & {
+      readonly basePath?: string | undefined;
+      readonly registryDir?: string | undefined;
+    },
+    onOutput: (text: string) => void,
+  ) {
+    if (installing) {
+      return yield* failure("port_busy", "An ESP-IDF install is already running.");
+    }
+    installing = true;
+    return yield* Effect.gen(function* () {
+      const started = yield* Clock.currentTimeMillis;
+      const { eim, directory } = yield* ensureEim(onOutput);
+      const platform = yield* HostProcess.Platform;
+      const args = eimInstallArgs({
+        mirror: input.mirror ?? "global",
+        basePath: input.basePath,
+        registryDir: input.registryDir,
+      });
+      onOutput(`Installing ESP-IDF ${KITTY_IDF_RELEASE} for ESP32-S3 (about 2 GB)…\n`);
+      const result = yield* processRunner
+        .run({
+          // EIM logs progress to stderr; merge it so the panel shows it live.
+          ...(platform === "win32"
+            ? { command: eim, args }
+            : { command: "/bin/bash", args: ["-c", 'exec "$@" 2>&1', "eim", eim, ...args] }),
+          cwd: directory,
+          timeout: "90 minutes",
+          onStdoutChunk: utf8Chunks(onOutput),
+          outputMode: "truncate",
+          timeoutBehavior: "timedOutResult",
+        })
+        .pipe(Effect.mapError((cause) => failure("command_failed", cause.message)));
+      const output = `${result.stdout}\n${result.stderr}`;
+      return {
+        ok: result.code === 0 && !result.timedOut,
+        idfVersion: KITTY_IDF_RELEASE,
+        durationMs: (yield* Clock.currentTimeMillis) - started,
+        logTail: result.timedOut ? "The install timed out after 90 minutes." : logTail(output, 30),
+      } satisfies HardwareToolchainInstallResult;
+    }).pipe(Effect.ensuring(Effect.sync(() => (installing = false))));
+  });
+
   const build = Effect.fn("HardwareService.build")(function* (
     input: HardwareBuildInput & { readonly directory: string },
     onOutput?: (text: string) => void,
@@ -1108,6 +1268,7 @@ export const make = Effect.fn("HardwareService.make")(function* () {
     monitor,
     reset,
     flash,
+    installToolchain,
     approvals: approvals.pending,
     respondApproval: approvals.respond,
     createProject,

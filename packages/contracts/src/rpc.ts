@@ -324,6 +324,8 @@ import {
   HardwareProjectFlashInput,
   HardwareProjectsInput,
   HardwareProjectsResult,
+  HardwareToolchainInstallEvent,
+  HardwareToolchainInstallInput,
   HardwareToolError,
 } from "./hardware.ts";
 import {
@@ -514,6 +516,7 @@ export const WS_METHODS = {
   hardwareMonitor: "hardware.monitor",
   hardwareApprovals: "hardware.approvals",
   hardwareApprovalRespond: "hardware.approvalRespond",
+  hardwareToolchainInstall: "hardware.toolchainInstall",
   deviceTestHost: "device.testHost",
   deviceEasAccount: "device.easAccount",
   deviceSimlockIdentity: "device.simlockIdentity",
@@ -1758,6 +1761,13 @@ const WsHardwareApprovalRespondRpc = Rpc.make(WS_METHODS.hardwareApprovalRespond
   error: EnvironmentAuthorizationError,
 });
 
+const WsHardwareToolchainInstallRpc = Rpc.make(WS_METHODS.hardwareToolchainInstall, {
+  payload: HardwareToolchainInstallInput,
+  success: HardwareToolchainInstallEvent,
+  error: Schema.Union([HardwareToolError, EnvironmentAuthorizationError]),
+  stream: true,
+});
+
 const WsDeviceConfigureRpc = Rpc.make(WS_METHODS.deviceConfigure, {
   payload: DeviceConfigureInput,
   success: DeviceServiceState,
@@ -2259,6 +2269,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsHardwareMonitorRpc,
   WsHardwareApprovalsRpc,
   WsHardwareApprovalRespondRpc,
+  WsHardwareToolchainInstallRpc,
   WsDeviceTestHostRpc,
   WsDeviceEasAccountRpc,
   WsDeviceSimlockIdentityRpc,
