@@ -41,6 +41,7 @@ import {
   KicadNetlistResult,
   OrchestratorMcpFailure,
 } from "@t3tools/contracts";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
@@ -281,11 +282,16 @@ const KicadFabExportTool = Tool.make("kicad_fab_export", {
 
 const HardwareProjectNewTool = Tool.make("hw_hardware_project_new", {
   description:
-    "Start a new ESP32-S3 hardware project from scratch: a blank KiCad 10 project in hardware/kicad/, an ESP-IDF firmware in firmware/, project.json, hardware/board.json and a .gitignore. Use when the user wants a new board; for firmware only, use hw_project_create.",
+    "Start a new product as its own git repository, hardware and firmware together: a blank KiCad 10 project in hardware/kicad/, an ESP-IDF firmware for the ESP32-S3 in firmware/, manufacturing/, project.json and hardware/board.json, registered as a new Kitty project. By default it goes next to the current project. Use when the user wants a new board; for firmware only, use hw_project_create.",
   parameters: HardwareProjectNewInput,
   success: HardwareProjectNewResult,
   failure: HardwareFailure,
-  dependencies: [...kicadDependencies, HardwareService.HardwareService, FileSystem.FileSystem],
+  dependencies: [
+    ...kicadDependencies,
+    HardwareService.HardwareService,
+    FileSystem.FileSystem,
+    SecureRandom.SecureRandom,
+  ],
 })
   .annotate(Tool.Title, "New hardware project")
   .annotate(Tool.Destructive, false)

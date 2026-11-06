@@ -1,4 +1,6 @@
+import { scopeProjectRef } from "@t3tools/client-runtime/environment";
 import { runAtomCommand } from "@t3tools/client-runtime/state/runtime";
+import { ProjectId } from "@t3tools/contracts";
 import type {
   HardwarePinmapSyncResult,
   KicadBomResult,
@@ -6,7 +8,6 @@ import type {
   KicadDesign,
   KicadFabExportResult,
   KicadViolation,
-  ProjectId,
   ScopedThreadRef,
 } from "@t3tools/contracts";
 import {
@@ -22,6 +23,7 @@ import {
 import type * as Cause from "effect/Cause";
 import { useState } from "react";
 
+import { useNewThreadHandler } from "../../hooks/useHandleNewThread";
 import { appAtomRegistry } from "../../rpc/atomRegistry";
 import {
   hardwareBom,
@@ -32,7 +34,6 @@ import {
   hardwareNewProject,
   hardwareOpenInKicad,
   hardwarePinmapSync,
-  hardwareProjects,
 } from "../../state/hardware";
 import { formatEnvironmentQueryError, useEnvironmentQuery } from "../../state/query";
 import { Badge } from "../ui/badge";
@@ -302,19 +303,23 @@ function DesignRow(props: {
   );
 }
 
-/** Starts an empty ESP32-S3 hardware project: blank KiCad design plus ESP-IDF firmware. */
+/**
+ * Starts a new product as its own git repository, hardware and firmware
+ * together, and opens it as a new Kitty project.
+ */
 function NewHardwareProject(props: {
   readonly threadRef: ScopedThreadRef;
   readonly projectId: ProjectId;
-  readonly onCreated: () => void;
   readonly onCancel: () => void;
 }) {
+  const handleNewThread = useNewThreadHandler();
   const [name, setName] = useState("");
+  const [location, setLocation] = useState("");
   const [state, setState] = useState<{ running: boolean; error: string | null }>({
     running: false,
     error: null,
   });
-  const slug = name
+  const folder = name
     .trim()
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
@@ -322,45 +327,65 @@ function NewHardwareProject(props: {
 
   const create = async () => {
     setState({ running: true, error: null });
+    const { environmentId } = props.threadRef;
     const result = await runAtomCommand(
       appAtomRegistry,
       hardwareNewProject,
       {
-        environmentId: props.threadRef.environmentId,
+        environmentId,
         input: {
           threadId: props.threadRef.threadId,
           projectId: props.projectId,
-          path: slug,
           name: name.trim(),
+          ...(location.trim() ? { location: location.trim() } : {}),
         },
       },
       { reportFailure: false },
     );
-    if (result._tag === "Success") {
-      setState({ running: false, error: null });
-      props.onCreated();
-    } else {
+    if (result._tag === "Failure") {
       setState({ running: false, error: formatEnvironmentQueryError(result.cause) });
+      return;
     }
+    // The new project reaches the sidebar through the project feed; wait for it, then open it.
+    const projectRef = scopeProjectRef(environmentId, ProjectId.make(result.value.projectId));
+    for (let attempt = 0; attempt < 20; attempt++) {
+      if ((await handleNewThread(projectRef)) !== null) return;
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    setState({
+      running: false,
+      error: `Created ${result.value.root}. Open it from the sidebar.`,
+    });
   };
 
   return (
     <div className="mb-2 flex flex-col gap-2 rounded-md border p-2">
       <div className="text-xs text-muted-foreground">
-        Creates a blank KiCad 10 project and an ESP-IDF firmware for the ESP32-S3, in a new folder.
+        A new product gets its own git repository with the hardware (blank KiCad 10 project) and the
+        firmware (ESP-IDF for the ESP32-S3) side by side, and opens as a new Kitty project.
       </div>
       <Input
         size="sm"
-        placeholder="Board name, e.g. KeyCAP"
+        placeholder="Product name, e.g. KeyCAP"
         value={name}
         disabled={state.running}
         onChange={(event) => setName(event.target.value)}
       />
-      {slug ? (
-        <div className="font-mono text-2xs text-muted-foreground">Folder: {slug}/</div>
+      <Input
+        size="sm"
+        placeholder="Location (absolute path). Default: next to this project"
+        value={location}
+        disabled={state.running}
+        onChange={(event) => setLocation(event.target.value)}
+      />
+      {folder ? (
+        <div className="font-mono text-2xs text-muted-foreground">
+          {location.trim() ? `${location.trim().replace(/\/+$/, "")}/${folder}/` : `../${folder}/`}{" "}
+          (hardware/ firmware/ manufacturing/ docs/ tests/)
+        </div>
       ) : null}
       <div className="flex gap-1">
-        <Button size="xs" disabled={!slug || state.running} onClick={() => void create()}>
+        <Button size="xs" disabled={!folder || state.running} onClick={() => void create()}>
           {state.running ? <LoaderCircleIcon className="animate-spin" /> : <PlusIcon />}
           {state.running ? "Creating…" : "Create"}
         </Button>
@@ -381,7 +406,6 @@ export function HardwareDesigns(props: {
   const { environmentId, threadId } = props.threadRef;
   const input = { threadId, projectId: props.projectId };
   const designs = useEnvironmentQuery(hardwareDesigns({ environmentId, input }));
-  const firmware = useEnvironmentQuery(hardwareProjects({ environmentId, input }));
   const [creating, setCreating] = useState(false);
   const list = designs.data?.designs ?? [];
   return (
@@ -400,11 +424,6 @@ export function HardwareDesigns(props: {
           threadRef={props.threadRef}
           projectId={props.projectId}
           onCancel={() => setCreating(false)}
-          onCreated={() => {
-            setCreating(false);
-            designs.refresh();
-            firmware.refresh();
-          }}
         />
       ) : null}
       {designs.error !== null ? (

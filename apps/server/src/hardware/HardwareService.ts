@@ -144,6 +144,8 @@ export class HardwareService extends Context.Service<
       },
       onOutput: (text: string) => void,
     ) => Effect.Effect<HardwareToolchainInstallResult, HardwareToolError>;
+    /** `git init` plus a first commit of everything; false without git or a git identity. */
+    readonly initRepository: (root: string, message: string) => Effect.Effect<boolean>;
     /** Agent flashes waiting for the user's answer. */
     readonly approvals: Stream.Stream<ReadonlyArray<HardwareApproval>>;
     readonly respondApproval: (id: string, allow: boolean) => Effect.Effect<boolean>;
@@ -1201,6 +1203,20 @@ export const make = Effect.fn("HardwareService.make")(function* () {
     }).pipe(Effect.ensuring(Effect.sync(() => (installing = false))));
   });
 
+  const initRepository = Effect.fn("HardwareService.initRepository")(function* (
+    root: string,
+    message: string,
+  ) {
+    const git = (args: ReadonlyArray<string>) =>
+      processRunner.run({ command: "git", args, cwd: root, timeout: "1 minute" }).pipe(
+        Effect.map((result) => result.code === 0),
+        Effect.orElseSucceed(() => false),
+      );
+    if (!(yield* git(["init", "-b", "main"]))) return false;
+    if (!(yield* git(["add", "-A"]))) return false;
+    return yield* git(["commit", "-m", message]);
+  });
+
   const build = Effect.fn("HardwareService.build")(function* (
     input: HardwareBuildInput & { readonly directory: string },
     onOutput?: (text: string) => void,
@@ -1269,6 +1285,7 @@ export const make = Effect.fn("HardwareService.make")(function* () {
     reset,
     flash,
     installToolchain,
+    initRepository,
     approvals: approvals.pending,
     respondApproval: approvals.respond,
     createProject,

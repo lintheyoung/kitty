@@ -487,7 +487,8 @@ export type HardwareDesignInput = typeof HardwareDesignInput.Type;
 
 export const HardwareNewProjectInput = Schema.Struct({
   ...HardwareWorkspaceTarget,
-  path: Schema.String,
-  name: Schema.optional(Schema.String),
+  name: Schema.String,
+  /** Absolute parent directory; default next to the current project. */
+  location: Schema.optional(Schema.String),
 });
 export type HardwareNewProjectInput = typeof HardwareNewProjectInput.Type;

@@ -339,3 +339,14 @@ export function checkPins(input: {
   const rank = (issue: HardwarePinIssue) => (issue.severity === "error" ? 0 : 1);
   return { issues: issues.toSorted((a, b) => rank(a) - rank(b)), firmware };
 }
+
+/**
+ * The hardware project a KiCad project belongs to: the directory above
+ * `hardware/` for Kitty's layout, else the KiCad project's own directory.
+ */
+export function hardwareProjectRoot(kicadProject: string): string {
+  const parts = kicadProject.split("/");
+  const index = parts.lastIndexOf("hardware");
+  if (index >= 0) return parts.slice(0, index).join("/") || ".";
+  return parts.slice(0, -1).join("/") || ".";
+}

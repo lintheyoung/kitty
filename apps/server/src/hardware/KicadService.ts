@@ -48,6 +48,7 @@ import {
   checkPins,
   chipFamily,
   detectMcu,
+  hardwareProjectRoot,
   scanFirmwarePins,
   schematicPins,
 } from "./projectModel.ts";
@@ -372,9 +373,17 @@ export const make = Effect.fn("KicadService.make")(function* () {
     input: InWorkspace<KicadFabExportInput>,
   ) {
     const { file, relative } = yield* resolveDesign(input.workspaceRoot, input.path, ".kicad_pcb");
+    // Kitty projects keep fab files in manufacturing/; other KiCad projects get fab/.
+    const manufacturing = path.join(
+      input.workspaceRoot,
+      hardwareProjectRoot(relative),
+      "manufacturing",
+    );
     const outputDir = input.outputDir
       ? yield* confine(input.workspaceRoot, input.outputDir)
-      : path.join(path.dirname(file), "fab");
+      : (yield* fs.exists(manufacturing).pipe(Effect.orElseSucceed(() => false)))
+        ? manufacturing
+        : path.join(path.dirname(file), "fab");
     const cli = yield* findCli();
     const board = yield* fs
       .readFileString(file)

@@ -200,7 +200,8 @@ import * as ServerBrowser from "./preview/ServerBrowser.ts";
 import * as DeviceService from "./device/DeviceService.ts";
 import * as HardwareService from "./hardware/HardwareService.ts";
 import * as KicadService from "./hardware/KicadService.ts";
-import { createHardwareProject, hardwareProjectRoot } from "./hardware/newHardwareProject.ts";
+import { createHardwareRepo } from "./hardware/newHardwareProject.ts";
+import { hardwareProjectRoot } from "./hardware/projectModel.ts";
 import { resolveInWorkspace } from "./hardware/workspacePath.ts";
 import { remoteSshDeviceHosts } from "./device/localSshDeviceHost.ts";
 import * as PreviewManager from "./preview/Manager.ts";
@@ -1447,7 +1448,7 @@ export const layerWsRpc = (
       const hardwareWorkspaceContext = yield* Effect.context<
         | Effect.Services<ReturnType<typeof requireHardwareWorkspace>>
         | Effect.Services<ReturnType<typeof resolveInWorkspace>>
-        | Effect.Services<ReturnType<typeof createHardwareProject>>
+        | Effect.Services<ReturnType<typeof createHardwareRepo>>
       >();
       const orchestrationEngine = yield* Orchestrator.OrchestratorV2;
       const random = yield* SecureRandom.SecureRandom;
@@ -3290,10 +3291,10 @@ export const layerWsRpc = (
         [WS_METHODS.hardwareNewProject]: (input) =>
           requireHardwareWorkspace(input).pipe(
             Effect.flatMap((workspaceRoot) =>
-              createHardwareProject({
-                path: input.path,
-                ...(input.name ? { name: input.name } : {}),
-                workspaceRoot,
+              createHardwareRepo({
+                name: input.name,
+                ...(input.location ? { location: input.location } : {}),
+                nextTo: workspaceRoot,
               }),
             ),
             Effect.provide(hardwareWorkspaceContext),

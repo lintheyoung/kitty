@@ -383,24 +383,30 @@ export const HardwarePinCheckResult = Schema.Struct({
 });
 export type HardwarePinCheckResult = typeof HardwarePinCheckResult.Type;
 
+/** A new product repository: hardware and firmware together, one Kitty project. */
 export const HardwareProjectNewInput = Schema.Struct({
-  path: Schema.String.annotate({
-    description: "New hardware project directory, relative to the workspace. Must not exist yet.",
-  }),
-  name: Schema.optional(
+  name: Schema.String.annotate({ description: "Product or board name, e.g. KeyCAP." }),
+  location: Schema.optional(
     Schema.String.annotate({
-      description: "Board name, e.g. KeyCAP. Default: the directory name.",
+      description:
+        "Absolute directory to create the repository in. Default: next to the current project.",
     }),
   ),
 });
 export type HardwareProjectNewInput = typeof HardwareProjectNewInput.Type;
 
 export const HardwareProjectNewResult = Schema.Struct({
+  /** Absolute path of the new repository. */
   root: Schema.String,
+  /** The Kitty project registered for it. */
+  projectId: Schema.String,
+  /** Paths below are relative to the repository. */
   schematic: Schema.String,
   board: Schema.String,
   firmware: Schema.String,
   files: Schema.Array(Schema.String),
+  /** False when git is missing or has no user identity; the files are there either way. */
+  committed: Schema.Boolean,
   next_steps: Schema.Array(Schema.String),
 });
 export type HardwareProjectNewResult = typeof HardwareProjectNewResult.Type;
