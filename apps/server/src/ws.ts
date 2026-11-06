@@ -3321,6 +3321,12 @@ export const layerWsRpc = (
               kicadService.bom({ path: input.path, workspaceRoot }),
             ),
           ),
+        [WS_METHODS.hardwarePreview]: (input) =>
+          requireHardwareWorkspace(input).pipe(
+            Effect.flatMap((workspaceRoot) =>
+              kicadService.preview({ path: input.path, kind: input.kind, workspaceRoot }),
+            ),
+          ),
         [WS_METHODS.hardwareFabExport]: (input) =>
           requireHardwareWorkspace(input).pipe(
             Effect.flatMap((workspaceRoot) =>

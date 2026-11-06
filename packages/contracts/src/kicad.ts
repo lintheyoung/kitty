@@ -165,6 +165,27 @@ export const KicadBomResult = Schema.Struct({
 });
 export type KicadBomResult = typeof KicadBomResult.Type;
 
+export const KicadPreviewKind = Schema.Literals(["schematic", "board"]);
+export type KicadPreviewKind = typeof KicadPreviewKind.Type;
+
+/** One drawing: a schematic sheet, or the board's copper, silkscreen and outline. */
+export const KicadPreviewPage = Schema.Struct({
+  name: Schema.String,
+  svg: Schema.String,
+});
+export type KicadPreviewPage = typeof KicadPreviewPage.Type;
+
+export const KicadPreviewResult = Schema.Struct({
+  kind: KicadPreviewKind,
+  /** The design file drawn, relative to the workspace. */
+  file: Schema.String,
+  /** Empty when there is nothing to draw yet (a blank board). */
+  pages: Schema.Array(KicadPreviewPage),
+  /** Sheets left out to keep the reply small. */
+  omitted: Schema.Int,
+});
+export type KicadPreviewResult = typeof KicadPreviewResult.Type;
+
 export const KicadFabExportInput = Schema.Struct({
   path: BoardPath,
   outputDir: Schema.optional(

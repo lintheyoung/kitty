@@ -200,6 +200,10 @@ export const hardwareBom = createEnvironmentRpcCommand(connectionAtomRuntime, {
   label: "environment-data:hardware:bom",
   tag: WS_METHODS.hardwareBom,
 });
+export const hardwarePreview = createEnvironmentRpcCommand(connectionAtomRuntime, {
+  label: "environment-data:hardware:preview",
+  tag: WS_METHODS.hardwarePreview,
+});
 export const hardwareFabExport = createEnvironmentRpcCommand(connectionAtomRuntime, {
   label: "environment-data:hardware:fab-export",
   tag: WS_METHODS.hardwareFabExport,

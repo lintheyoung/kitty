@@ -182,3 +182,62 @@ it("reads copper layers from a board header", () => {
 	(segment (layer "F.Cu")))`;
   assert.deepStrictEqual(KicadService.boardCopperLayers(board), ["F.Cu", "In1.Cu", "B.Cu"]);
 });
+
+/** A fake kicad-cli that draws SVGs like `export svg`: sheets into a directory, a board into a file. */
+const drawingCli = (calls: Array<ReadonlyArray<string>>, boardSvg: string) =>
+  ProcessRunner.ProcessRunner.of({
+    run: (input) =>
+      Effect.gen(function* () {
+        if (input.args[0] === "version") return result("10.0.7\n");
+        calls.push(input.args);
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const output = input.args[input.args.indexOf("-o") + 1] ?? "";
+        if (input.args[0] === "sch") {
+          yield* fs
+            .writeFileString(path.join(output, "keycap.svg"), "<svg>root</svg>")
+            .pipe(Effect.orDie);
+          yield* fs
+            .writeFileString(path.join(output, "keycap-power.svg"), "<svg>power</svg>")
+            .pipe(Effect.orDie);
+        } else {
+          yield* fs.writeFileString(output, boardSvg).pipe(Effect.orDie);
+        }
+        return result("");
+      }).pipe(Effect.provide(NodeServices.layer)),
+  });
+
+it.effect("draws schematic sheets root first, and a board unless it is blank", () =>
+  Effect.gen(function* () {
+    const root = yield* workspace();
+    const fs = yield* FileSystem.FileSystem;
+    yield* fs.writeFileString(`${root}/hw/keycap/keycap.kicad_pcb`, "");
+    const calls: Array<ReadonlyArray<string>> = [];
+    const sheets = yield* withCli(drawingCli(calls, ""), (service) =>
+      service.preview({
+        workspaceRoot: root,
+        path: "hw/keycap/keycap.kicad_pro",
+        kind: "schematic",
+      }),
+    );
+    assert.equal(sheets.file, "hw/keycap/keycap.kicad_sch");
+    assert.deepStrictEqual(
+      sheets.pages.map((page) => page.name),
+      ["Root sheet", "power"],
+    );
+
+    const drawn = '<svg viewBox="0 0 33.2 18.1"><path/></svg>';
+    const board = yield* withCli(drawingCli(calls, drawn), (service) =>
+      service.preview({ workspaceRoot: root, path: "hw/keycap", kind: "board" }),
+    );
+    assert.equal(board.file, "hw/keycap/keycap.kicad_pcb");
+    assert.deepStrictEqual(board.pages, [{ name: "Board", svg: drawn }]);
+    assert.include(calls.at(-1) ?? [], "--mode-single");
+
+    const blank = yield* withCli(
+      drawingCli(calls, '<svg viewBox="0.0000 0.0000 0.2540 0.2540"></svg>'),
+      (service) => service.preview({ workspaceRoot: root, path: "hw/keycap", kind: "board" }),
+    );
+    assert.equal(blank.pages.length, 0);
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);

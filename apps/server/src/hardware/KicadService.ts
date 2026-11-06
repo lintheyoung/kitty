@@ -10,6 +10,8 @@ import {
   type KicadFabExportResult,
   type KicadNetlistInput,
   type KicadNetlistResult,
+  type KicadPreviewKind,
+  type KicadPreviewResult,
   type HardwarePinCheckInput,
   type HardwarePinCheckResult,
   type HardwarePinmapSyncInput,
@@ -38,9 +40,11 @@ import { logTail } from "./buildOutput.ts";
 import {
   buildBom,
   componentPins,
+  isBlankBoardSvg,
   parseDrcReport,
   parseErcReport,
   parseNetlist,
+  schematicPages,
 } from "./kicadReports.ts";
 import {
   buildComponents,
@@ -100,12 +104,21 @@ export class KicadService extends Context.Service<
       fileStem: string,
       title: string,
     ) => Effect.Effect<ReadonlyArray<string>, HardwareToolError>;
+    /** SVG drawings of the schematic sheets or the board, for the panel. */
+    readonly preview: (
+      input: InWorkspace<{ readonly path: string; readonly kind: KicadPreviewKind }>,
+    ) => Effect.Effect<KicadPreviewResult, HardwareToolError>;
     /** Checks firmware pins and pinmap.json against the schematic. */
     readonly pinCheck: (
       input: InWorkspace<HardwarePinCheckInput>,
     ) => Effect.Effect<HardwarePinCheckResult, HardwareToolError>;
   }
 >()("t3/hardware/KicadService") {}
+
+/** What the board preview draws: copper, silkscreen and outline, like a bare board. */
+const BOARD_PREVIEW_LAYERS = "F.Cu,B.Cu,F.Silkscreen,B.Silkscreen,Edge.Cuts";
+/** Keeps a preview reply well under the WebSocket message size. */
+const MAX_PREVIEW_BYTES = 8_000_000;
 
 const MAC_KICAD_CLI = "/Applications/KiCad/KiCad.app/Contents/MacOS/kicad-cli";
 
@@ -818,7 +831,80 @@ export const make = Effect.fn("KicadService.make")(function* () {
     return { opened: input.path };
   });
 
+  const preview = Effect.fn("KicadService.preview")(function* (
+    input: InWorkspace<{ readonly path: string; readonly kind: KicadPreviewKind }>,
+  ) {
+    const extension = input.kind === "schematic" ? ".kicad_sch" : ".kicad_pcb";
+    const { file, relative } = yield* resolveDesign(input.workspaceRoot, input.path, extension);
+    const cli = yield* findCli();
+    const stem = path.basename(file, extension);
+    return yield* Effect.scoped(
+      Effect.gen(function* () {
+        const temp = yield* fs
+          .makeTempDirectoryScoped({ prefix: "kitty-kicad-preview-" })
+          .pipe(Effect.mapError((cause) => failure("command_failed", cause.message)));
+        const read = (name: string) =>
+          fs
+            .readFileString(path.join(temp, name))
+            .pipe(Effect.mapError((cause) => failure("command_failed", cause.message)));
+        if (input.kind === "board") {
+          const output = path.join(temp, `${stem}.svg`);
+          yield* runCli(
+            cli,
+            [
+              "pcb",
+              "export",
+              "svg",
+              "--mode-single",
+              "--layers",
+              BOARD_PREVIEW_LAYERS,
+              "--page-size-mode",
+              "2",
+              "--exclude-drawing-sheet",
+              "-o",
+              output,
+              file,
+            ],
+            path.dirname(file),
+          );
+          const svg = yield* read(`${stem}.svg`);
+          if (svg.length > MAX_PREVIEW_BYTES) {
+            return {
+              kind: input.kind,
+              file: relative,
+              pages: [],
+              omitted: 1,
+            } satisfies KicadPreviewResult;
+          }
+          const pages = isBlankBoardSvg(svg) ? [] : [{ name: "Board", svg }];
+          return {
+            kind: input.kind,
+            file: relative,
+            pages,
+            omitted: 0,
+          } satisfies KicadPreviewResult;
+        }
+        yield* runCli(cli, ["sch", "export", "svg", "-o", temp, file], path.dirname(file));
+        const names = yield* fs
+          .readDirectory(temp)
+          .pipe(Effect.mapError((cause) => failure("command_failed", cause.message)));
+        const files = yield* Effect.forEach(
+          names.filter((name) => name.endsWith(".svg")),
+          (name) => read(name).pipe(Effect.map((svg) => ({ name, svg }))),
+        );
+        const { pages, omitted } = schematicPages(stem, files, MAX_PREVIEW_BYTES);
+        return {
+          kind: input.kind,
+          file: relative,
+          pages: [...pages],
+          omitted,
+        } satisfies KicadPreviewResult;
+      }),
+    );
+  });
+
   return KicadService.of({
+    preview,
     listDesigns,
     openInKicad,
     createBlankDesign,

@@ -3,9 +3,11 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   buildBom,
   componentPins,
+  isBlankBoardSvg,
   parseDrcReport,
   parseErcReport,
   parseNetlist,
+  schematicPages,
   unescapeKicad,
 } from "./kicadReports.ts";
 import { parseSexpr } from "./sexpr.ts";
@@ -192,7 +194,7 @@ describe("parseErcReport", () => {
   it("caps the list at 100 but counts everything", () => {
     const violation = { description: "d", items: [], severity: "warning", type: "t" };
     const many = JSON.stringify({
-      sheets: [{ path: "/", violations: Array(150).fill(violation) }],
+      sheets: [{ path: "/", violations: Array.from({ length: 150 }, () => violation) }],
     });
     const report = parseErcReport(many);
     expect(report.violations).toHaveLength(100);
@@ -309,4 +311,42 @@ it("drops KiCad 10's pin-number suffix only when a component uses it on every pi
 
 it("unescapes KiCad names", () => {
   expect(unescapeKicad("IO20{slash}RXD{colon}x{nope}")).toBe("IO20/RXD:x{nope}");
+});
+
+describe("previews", () => {
+  it("treats KiCad's 0.254 mm page as an empty board", () => {
+    expect(isBlankBoardSvg('<svg width="0.2540mm" viewBox="0.0000 0.0000 0.2540 0.2540">')).toBe(
+      true,
+    );
+    expect(isBlankBoardSvg('<svg viewBox="0.0000 0.0000 33.2232 18.0848">')).toBe(false);
+    expect(isBlankBoardSvg("<svg>")).toBe(true);
+  });
+
+  it("puts the root sheet first and names sub-sheets", () => {
+    const { pages, omitted } = schematicPages(
+      "keycap",
+      [
+        { name: "keycap-usb.svg", svg: "u" },
+        { name: "keycap.svg", svg: "r" },
+        { name: "keycap-power.svg", svg: "p" },
+        { name: "notes.txt", svg: "x" },
+      ],
+      100,
+    );
+    expect(pages.map((page) => page.name)).toEqual(["Root sheet", "power", "usb"]);
+    expect(omitted).toBe(0);
+  });
+
+  it("keeps the first sheet even when it alone is over the limit", () => {
+    const { pages, omitted } = schematicPages(
+      "a",
+      [
+        { name: "a.svg", svg: "x".repeat(10) },
+        { name: "a-b.svg", svg: "y" },
+      ],
+      5,
+    );
+    expect(pages.map((page) => page.name)).toEqual(["Root sheet"]);
+    expect(omitted).toBe(1);
+  });
 });

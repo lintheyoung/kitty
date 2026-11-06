@@ -282,3 +282,52 @@ export function buildBom(
     unsourced: unsourced.toSorted(naturalCompare),
   };
 }
+
+/** Below this an exported board drawing holds nothing (KiCad writes a 0.254 mm page). */
+const MIN_BOARD_DRAWING_MM = 1;
+
+/** Width and height of an SVG's viewBox, or null when it has none. */
+function svgSize(svg: string): { readonly width: number; readonly height: number } | null {
+  const match = /viewBox="\s*[-\d.]+\s+[-\d.]+\s+([\d.]+)\s+([\d.]+)\s*"/.exec(svg);
+  if (!match) return null;
+  return { width: Number(match[1]), height: Number(match[2]) };
+}
+
+/** True when kicad-cli drew an empty board: no outline, footprints or tracks yet. */
+export function isBlankBoardSvg(svg: string): boolean {
+  const size = svgSize(svg);
+  return size === null || (size.width < MIN_BOARD_DRAWING_MM && size.height < MIN_BOARD_DRAWING_MM);
+}
+
+/**
+ * Orders the SVG files `kicad-cli sch export svg` wrote for `stem`: the root
+ * sheet (`<stem>.svg`) first, then sub-sheets (`<stem>-<sheet>.svg`) by name,
+ * keeping as many as fit in `maxBytes`.
+ */
+export function schematicPages(
+  stem: string,
+  files: ReadonlyArray<{ readonly name: string; readonly svg: string }>,
+  maxBytes: number,
+): { readonly pages: ReadonlyArray<{ name: string; svg: string }>; readonly omitted: number } {
+  const named = files
+    .filter((file) => file.name.endsWith(".svg"))
+    .map((file) => {
+      const base = file.name.slice(0, -".svg".length);
+      const root = base === stem;
+      const name = root
+        ? "Root sheet"
+        : base.startsWith(`${stem}-`)
+          ? base.slice(stem.length + 1)
+          : base;
+      return { root, name, svg: file.svg };
+    })
+    .toSorted((a, b) => (a.root === b.root ? a.name.localeCompare(b.name) : a.root ? -1 : 1));
+  const pages: Array<{ name: string; svg: string }> = [];
+  let used = 0;
+  for (const page of named) {
+    if (pages.length > 0 && used + page.svg.length > maxBytes) break;
+    pages.push({ name: page.name, svg: page.svg });
+    used += page.svg.length;
+  }
+  return { pages, omitted: named.length - pages.length };
+}

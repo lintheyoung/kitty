@@ -485,6 +485,13 @@ export const HardwareDesignInput = Schema.Struct({
 });
 export type HardwareDesignInput = typeof HardwareDesignInput.Type;
 
+export const HardwarePreviewInput = Schema.Struct({
+  ...HardwareWorkspaceTarget,
+  path: Schema.String,
+  kind: Schema.Literals(["schematic", "board"]),
+});
+export type HardwarePreviewInput = typeof HardwarePreviewInput.Type;
+
 export const HardwareNewProjectInput = Schema.Struct({
   ...HardwareWorkspaceTarget,
   name: Schema.String,

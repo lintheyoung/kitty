@@ -227,6 +227,7 @@ const RPC_AGGREGATES = {
   [WS_METHODS.hardwareErc]: "hardware",
   [WS_METHODS.hardwareDrc]: "hardware",
   [WS_METHODS.hardwareBom]: "hardware",
+  [WS_METHODS.hardwarePreview]: "hardware",
   [WS_METHODS.hardwareFabExport]: "hardware",
   [WS_METHODS.hardwarePinmapSync]: "hardware",
   [WS_METHODS.hardwareOpenInKicad]: "hardware",

@@ -325,6 +325,7 @@ import {
   HardwareProjectsInput,
   HardwareProjectsResult,
   HardwareDesignInput,
+  HardwarePreviewInput,
   HardwareNewProjectInput,
   HardwareToolchainInstallEvent,
   HardwareToolchainInstallInput,
@@ -337,6 +338,7 @@ import {
   KicadDrcResult,
   KicadErcResult,
   KicadFabExportResult,
+  KicadPreviewResult,
   HardwarePinmapSyncResult,
 } from "./kicad.ts";
 import {
@@ -536,6 +538,7 @@ export const WS_METHODS = {
   hardwareFabExport: "hardware.fabExport",
   hardwarePinmapSync: "hardware.pinmapSync",
   hardwareOpenInKicad: "hardware.openInKicad",
+  hardwarePreview: "hardware.preview",
   deviceTestHost: "device.testHost",
   deviceEasAccount: "device.easAccount",
   deviceSimlockIdentity: "device.simlockIdentity",
@@ -1817,6 +1820,12 @@ const WsHardwareBomRpc = Rpc.make(WS_METHODS.hardwareBom, {
   error: Schema.Union([HardwareToolError, EnvironmentAuthorizationError]),
 });
 
+const WsHardwarePreviewRpc = Rpc.make(WS_METHODS.hardwarePreview, {
+  payload: HardwarePreviewInput,
+  success: KicadPreviewResult,
+  error: Schema.Union([HardwareToolError, EnvironmentAuthorizationError]),
+});
+
 const WsHardwareFabExportRpc = Rpc.make(WS_METHODS.hardwareFabExport, {
   payload: HardwareDesignInput,
   success: KicadFabExportResult,
@@ -2345,6 +2354,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsHardwareFabExportRpc,
   WsHardwarePinmapSyncRpc,
   WsHardwareOpenInKicadRpc,
+  WsHardwarePreviewRpc,
   WsDeviceTestHostRpc,
   WsDeviceEasAccountRpc,
   WsDeviceSimlockIdentityRpc,

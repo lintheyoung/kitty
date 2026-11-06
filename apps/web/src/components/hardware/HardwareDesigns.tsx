@@ -7,10 +7,12 @@ import type {
   KicadCheckSummary,
   KicadDesign,
   KicadFabExportResult,
+  KicadPreviewResult,
   KicadViolation,
   ScopedThreadRef,
 } from "@t3tools/contracts";
 import {
+  CircuitBoardIcon,
   CpuIcon,
   ExternalLinkIcon,
   FileArchiveIcon,
@@ -18,7 +20,10 @@ import {
   LoaderCircleIcon,
   PlusIcon,
   ShieldCheckIcon,
+  SquareDashedIcon,
   TableIcon,
+  ZoomInIcon,
+  ZoomOutIcon,
 } from "lucide-react";
 import type * as Cause from "effect/Cause";
 import { useState } from "react";
@@ -34,18 +39,24 @@ import {
   hardwareNewProject,
   hardwareOpenInKicad,
   hardwarePinmapSync,
+  hardwarePreview,
 } from "../../state/hardware";
 import { formatEnvironmentQueryError, useEnvironmentQuery } from "../../state/query";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 
-type Action = "erc" | "drc" | "bom" | "fab" | "pinmap";
+type Action = "schematic" | "board" | "erc" | "drc" | "bom" | "fab" | "pinmap";
 
 type Outcome =
   | { readonly action: Action; readonly status: "running" }
   | { readonly action: Action; readonly status: "failed"; readonly message: string }
   | { readonly action: "erc" | "drc"; readonly status: "done"; readonly check: CheckView }
+  | {
+      readonly action: "schematic" | "board";
+      readonly status: "done";
+      readonly preview: KicadPreviewResult;
+    }
   | { readonly action: "bom"; readonly status: "done"; readonly bom: KicadBomResult }
   | { readonly action: "fab"; readonly status: "done"; readonly fab: KicadFabExportResult }
   | {
@@ -66,12 +77,80 @@ const ACTIONS: ReadonlyArray<{
   readonly needs: "schematic" | "board";
   readonly icon: typeof ShieldCheckIcon;
 }> = [
+  { id: "schematic", label: "Schematic", needs: "schematic", icon: SquareDashedIcon },
+  { id: "board", label: "PCB", needs: "board", icon: CircuitBoardIcon },
   { id: "erc", label: "ERC", needs: "schematic", icon: ShieldCheckIcon },
   { id: "drc", label: "DRC", needs: "board", icon: ShieldCheckIcon },
   { id: "bom", label: "BOM", needs: "schematic", icon: TableIcon },
   { id: "pinmap", label: "Pinmap", needs: "schematic", icon: CpuIcon },
   { id: "fab", label: "Fab files", needs: "board", icon: FileArchiveIcon },
 ];
+
+/**
+ * kicad-cli's drawing of the schematic sheets or the board. Shown as an image,
+ * so nothing in the file runs; the board is drawn on dark like KiCad's editor.
+ */
+function PreviewResult(props: { readonly preview: KicadPreviewResult }) {
+  const { preview } = props;
+  const [page, setPage] = useState(0);
+  const [zoomed, setZoomed] = useState(false);
+  const current = preview.pages[page] ?? preview.pages[0];
+  if (!current) {
+    return (
+      <p className="text-xs text-muted-foreground">
+        {preview.omitted > 0
+          ? "The drawing is too large to show here. Open it in KiCad."
+          : preview.kind === "board"
+            ? "Nothing on the board yet. Draw the outline on Edge.Cuts and place footprints in KiCad."
+            : "The schematic has no sheets to draw."}
+      </p>
+    );
+  }
+  return (
+    <div className="flex flex-col gap-1.5">
+      <div className="flex flex-wrap items-center gap-1">
+        {preview.pages.length > 1
+          ? preview.pages.map((candidate, index) => (
+              <Button
+                key={candidate.name}
+                size="xs"
+                variant={candidate === current ? "secondary" : "ghost"}
+                onClick={() => setPage(index)}
+              >
+                {candidate.name}
+              </Button>
+            ))
+          : null}
+        {preview.omitted > 0 ? (
+          <span className="text-2xs text-muted-foreground">
+            {preview.omitted} more sheet(s) in KiCad
+          </span>
+        ) : null}
+        <Button
+          size="xs"
+          variant="ghost"
+          className="ms-auto"
+          aria-label={zoomed ? "Fit to panel" : "Zoom in"}
+          onClick={() => setZoomed(!zoomed)}
+        >
+          {zoomed ? <ZoomOutIcon /> : <ZoomInIcon />}
+        </Button>
+      </div>
+      <div
+        className={`max-h-[28rem] overflow-auto rounded border ${
+          preview.kind === "board" ? "bg-pcb p-2" : "bg-white"
+        }`}
+      >
+        <img
+          alt={`${preview.kind === "board" ? "Board" : "Schematic"}: ${current.name}`}
+          src={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(current.svg)}`}
+          className={zoomed ? "w-[300%] max-w-none" : "w-full"}
+        />
+      </div>
+      <div className="font-mono text-2xs text-muted-foreground">{preview.file}</div>
+    </div>
+  );
+}
 
 function CheckResult(props: { readonly check: CheckView }) {
   const { summary, violations, truncated } = props.check;
@@ -176,6 +255,9 @@ function OutcomeView(props: { readonly outcome: Outcome }) {
     return <p className="text-xs text-destructive-foreground">{outcome.message}</p>;
   }
   switch (outcome.action) {
+    case "schematic":
+    case "board":
+      return <PreviewResult preview={outcome.preview} />;
     case "erc":
     case "drc":
       return <CheckResult check={outcome.check} />;
@@ -228,7 +310,18 @@ function DesignRow(props: {
       message: formatEnvironmentQueryError(cause),
     });
     let next: Outcome;
-    if (action === "erc") {
+    if (action === "schematic" || action === "board") {
+      const result = await runAtomCommand(
+        appAtomRegistry,
+        hardwarePreview,
+        { environmentId, input: { ...input, kind: action } },
+        options,
+      );
+      next =
+        result._tag === "Success"
+          ? { action, status: "done", preview: result.value }
+          : fail(result.cause);
+    } else if (action === "erc") {
       const result = await runAtomCommand(appAtomRegistry, hardwareErc, target, options);
       next =
         result._tag === "Success"
