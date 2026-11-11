@@ -38,6 +38,8 @@ import {
   JlcPartSearchInput,
   JlcPartSearchResult,
   KicadBomInput,
+  SchematicEditInput,
+  SchematicEditResult,
   KicadBomResult,
   KicadDrcInput,
   KicadDrcResult,
@@ -366,6 +368,19 @@ const JlcPartImportTool = Tool.make("jlc_part_import", {
   .annotate(Tool.Idempotent, true)
   .annotate(Tool.OpenWorld, true);
 
+const SchematicEditTool = Tool.make("sch_edit", {
+  description:
+    "Draw or change a schematic. `place` puts a part on the sheet (a free spot is found when `at` is left out) and connects its pins by net name: give `nets` as pin number to net, and every pin with the same net name is connected. Power nets (GND, +3V3, +5V, VBUS) get power symbols, other nets get labels. Use `noConnectRest` for parts with unused pins. `connect` changes the nets of a part already on the sheet; `move`, `remove` and `set` change it. Parts must be `jlc:` symbols from jlc_part_import. A supply net that no regulator output drives needs a power:PWR_FLAG placed with that net on pin 1. KiCad reads the result back and nothing is saved if it cannot; the reply gives each part's pins with their nets and the ERC error count.",
+  parameters: SchematicEditInput,
+  success: SchematicEditResult,
+  failure: HardwareFailure,
+  dependencies: kicadDependencies,
+})
+  .annotate(Tool.Title, "Edit schematic")
+  .annotate(Tool.Destructive, false)
+  .annotate(Tool.Idempotent, false)
+  .annotate(Tool.OpenWorld, false);
+
 const HardwareProjectInspectTool = Tool.make("hw_project_inspect", {
   description:
     "Start here in a hardware project: finds the KiCad schematic and board, the ESP-IDF firmware, and hardware/board.json, pinmap.json and components.json, with field-level errors and next steps. Returns board.json and pinmap.json when valid.",
@@ -426,6 +441,7 @@ export const HardwareToolkit = Toolkit.make(
   KicadFabExportTool,
   JlcPartSearchTool,
   JlcPartImportTool,
+  SchematicEditTool,
   HardwareProjectNewTool,
   HardwareProjectInspectTool,
   HardwarePinmapSyncTool,

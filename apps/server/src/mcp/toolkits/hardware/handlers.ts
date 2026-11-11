@@ -149,6 +149,12 @@ export const layer = McpToolAccess.toLayer(HardwareToolkit, {
       return yield* jlc.importPart({ ...input, workspaceRoot: yield* callerWorkspaceRoot() });
     }),
   ),
+  sch_edit: McpToolAccess.actsAsCaller((input) =>
+    Effect.gen(function* () {
+      const kicad = yield* KicadService.KicadService;
+      return yield* kicad.schematicEdit({ ...input, workspaceRoot: yield* callerWorkspaceRoot() });
+    }),
+  ),
   hw_project_inspect: McpToolAccess.actsAsCaller((input) =>
     Effect.gen(function* () {
       const kicad = yield* KicadService.KicadService;

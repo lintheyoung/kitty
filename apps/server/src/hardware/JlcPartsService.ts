@@ -12,6 +12,7 @@ import {
   librarySymbols,
   mergeSymbolLibraries,
   withLibraryEntry,
+  withUsablePinTypes,
 } from "@t3tools/shared/kicad/symbolLibrary";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -163,7 +164,18 @@ const make = Effect.fn("JlcPartsService.make")(function* () {
         yield* io(fs.makeDirectory(footprintDirectory, { recursive: true }));
         yield* kicad.upgradeLibraries({ symbols: symbolFile, footprints: footprintDirectory });
 
-        const incoming = yield* io(fs.readFileString(symbolFile));
+        const incoming = yield* io(fs.readFileString(symbolFile)).pipe(
+          Effect.flatMap((converted) =>
+            Effect.try({
+              try: () => withUsablePinTypes(converted),
+              catch: (cause) =>
+                failure(
+                  "command_failed",
+                  `JLC's symbol for ${lcsc} could not be read: ${String(cause)}`,
+                ),
+            }),
+          ),
+        );
         const symbol = librarySymbols(parseDoc(incoming))[0];
         if (!symbol) return yield* failure("command_failed", `JLC has no symbol for ${lcsc}.`);
         const described = describeSymbol(symbol);

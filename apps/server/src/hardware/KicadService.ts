@@ -28,9 +28,14 @@ import {
   KittyBoard,
   KittyComponents,
   KittyPinmap,
+  type SchematicEditInput,
+  type SchematicEditResult,
 } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import { applySchematicEdits, SchematicEditError } from "@t3tools/shared/kicad/schematicEdit";
 import { schematicSubSheets, type SubSheet } from "@t3tools/shared/kicad/schematicScene";
+import { type Node, parseDoc } from "@t3tools/shared/kicad/sexprDoc";
+import { librarySymbols } from "@t3tools/shared/kicad/symbolLibrary";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -38,6 +43,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as SchemaIssue from "effect/SchemaIssue";
 
 import * as ProcessRunner from "../processRunner.ts";
@@ -119,6 +125,10 @@ export class KicadService extends Context.Service<
     readonly boardModel: (
       input: InWorkspace<{ readonly path: string }>,
     ) => Effect.Effect<KicadBoardModelResult, HardwareToolError>;
+    /** Changes a schematic sheet; KiCad reads the result back before it is saved. */
+    readonly schematicEdit: (
+      input: InWorkspace<SchematicEditInput>,
+    ) => Effect.Effect<SchematicEditResult, HardwareToolError>;
     /** A value that changes when the design's schematic or board files are saved. */
     readonly designStamp: (
       input: InWorkspace<{ readonly path: string }>,
@@ -148,6 +158,17 @@ const BOARD_MODEL_DETAIL = ["--include-silkscreen", "--include-soldermask"];
 const MAC_KICAD_CLI = "/Applications/KiCad/KiCad.app/Contents/MacOS/kicad-cli";
 
 /** Where to look for kicad-cli: KICAD_CLI, then the macOS app, then PATH. */
+/** Where KiCad keeps its own symbol libraries, for the kicad-cli in use. */
+function kicadSymbolDirectories(cli: string, env: NodeJS.ProcessEnv): ReadonlyArray<string> {
+  const configured = [env.KICAD10_SYMBOL_DIR, env.KICAD_SYMBOL_DIR]
+    .map((value) => value?.trim())
+    .filter((value): value is string => Boolean(value));
+  const bundled = cli.endsWith("/Contents/MacOS/kicad-cli")
+    ? [`${cli.slice(0, -"/MacOS/kicad-cli".length)}/SharedSupport/symbols`]
+    : [];
+  return [...configured, ...bundled, "/usr/share/kicad/symbols", "/usr/local/share/kicad/symbols"];
+}
+
 export function kicadCliCandidates(env: NodeJS.ProcessEnv): ReadonlyArray<string> {
   const configured = env.KICAD_CLI?.trim();
   return configured ? [configured, MAC_KICAD_CLI] : [MAC_KICAD_CLI, "kicad-cli"];
@@ -179,6 +200,7 @@ export function boardCopperLayers(board: string): ReadonlyArray<string> {
 }
 
 export const make = Effect.fn("KicadService.make")(function* () {
+  const random = yield* SecureRandom.SecureRandom;
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const processRunner = yield* ProcessRunner.ProcessRunner;
@@ -1061,7 +1083,141 @@ export const make = Effect.fn("KicadService.make")(function* () {
     );
   });
 
+  /** The symbols of a library file by name; empty when the file is missing. */
+  const readSymbols = Effect.fn("KicadService.readSymbols")(function* (file: string) {
+    const source = yield* fs.readFileString(file).pipe(Effect.option);
+    if (Option.isNone(source)) return new Map<string, ReadonlyArray<Node>>();
+    const symbols = yield* parseOrFail(() => librarySymbols(parseDoc(source.value)), "library");
+    return new Map(symbols.map((symbol) => [String(symbol[1]).slice(1, -1), symbol] as const));
+  });
+
+  const powerSymbols = Effect.fn("KicadService.powerSymbols")(function* () {
+    const env = yield* HostProcess.Environment;
+    for (const directory of kicadSymbolDirectories(yield* findCli(), env)) {
+      const symbols = yield* readSymbols(path.join(directory, "power.kicad_sym"));
+      if (symbols.size > 0) return symbols;
+    }
+    return new Map<string, ReadonlyArray<Node>>();
+  });
+
+  const isEditError = Schema.is(SchematicEditError);
+  const schematicEdit = Effect.fn("KicadService.schematicEdit")(function* (
+    input: InWorkspace<SchematicEditInput>,
+  ) {
+    const { file, relative } = yield* resolveDesign(input.workspaceRoot, input.path, ".kicad_sch");
+    const directory = path.dirname(file);
+    const stem = path.basename(file, ".kicad_sch");
+    const libraries = {
+      jlc: yield* readSymbols(path.join(directory, "lib", "jlc.kicad_sym")),
+      power: yield* powerSymbols(),
+    };
+    const before = yield* fs
+      .readFileString(file)
+      .pipe(Effect.mapError((cause) => failure("invalid_path", cause.message)));
+    // One random id per edit; the items it adds are numbered from it.
+    const seed = yield* random.uuidV4();
+    let serial = 0;
+    const edited = yield* Effect.try({
+      try: () =>
+        applySchematicEdits(before, input.edits, {
+          project: stem,
+          uuid: () => `${seed.slice(0, 24)}${(serial++).toString(16).padStart(12, "0")}`,
+          symbol: (libId) => {
+            const [library = "", name = ""] = libId.split(":");
+            return library === "jlc" || library === "power"
+              ? libraries[library].get(name)
+              : undefined;
+          },
+        }),
+      catch: (cause) =>
+        isEditError(cause)
+          ? failure("invalid_argument", cause.message)
+          : failure("command_failed", `The schematic could not be edited: ${String(cause)}`),
+    });
+
+    const cli = yield* findCli();
+    const io = <A, E extends { readonly message: string }, R>(effect: Effect.Effect<A, E, R>) =>
+      effect.pipe(Effect.mapError((cause) => failure("command_failed", cause.message)));
+    // KiCad reads the result in a scratch copy of the project before the real file changes.
+    const checked = yield* Effect.scoped(
+      Effect.gen(function* () {
+        const temp = yield* io(fs.makeTempDirectoryScoped({ prefix: "kitty-sch-" }));
+        const candidate = path.join(temp, `${stem}.kicad_sch`);
+        yield* io(fs.writeFileString(candidate, edited.source));
+        yield* fs
+          .copyFile(path.join(directory, `${stem}.kicad_pro`), path.join(temp, `${stem}.kicad_pro`))
+          .pipe(Effect.ignore);
+        // The design's own libraries, so the check sees what KiCad will see.
+        for (const table of ["sym-lib-table", "fp-lib-table"]) {
+          yield* fs
+            .copyFile(path.join(directory, table), path.join(temp, table))
+            .pipe(Effect.ignore);
+        }
+        yield* fs.symlink(path.join(directory, "lib"), path.join(temp, "lib")).pipe(Effect.ignore);
+        const netFile = path.join(temp, "out.net");
+        const ercFile = path.join(temp, "erc.json");
+        yield* runCli(
+          cli,
+          ["sch", "export", "netlist", "--format", "kicadsexpr", "-o", netFile, candidate],
+          temp,
+        ).pipe(
+          Effect.mapError((error) =>
+            failure(
+              "command_failed",
+              `KiCad could not read the edited schematic, so nothing was changed.\n${error.message}`,
+            ),
+          ),
+        );
+        yield* runCli(
+          cli,
+          ["sch", "erc", "--format", "json", "--severity-all", "-o", ercFile, candidate],
+          temp,
+        );
+        const netText = yield* io(fs.readFileString(netFile));
+        const ercText = yield* io(fs.readFileString(ercFile));
+        return {
+          netlist: yield* parseOrFail(() => parseNetlist(netText), "netlist"),
+          erc: yield* parseOrFail(() => parseErcReport(ercText), "ERC report"),
+        };
+      }),
+    );
+    yield* io(fs.writeFileString(file, edited.source));
+
+    const warnings: Array<string> = [];
+    const parts = edited.placed.map((part) => {
+      const pins = componentPins(checked.netlist, part.reference);
+      // Power symbols and flags are not parts, so the netlist does not list them.
+      const wantedNets = part.reference.startsWith("#") ? {} : part.nets;
+      for (const [number, wanted] of Object.entries(wantedNets)) {
+        const actual = pins.find((pin) => pin.pin === number)?.net;
+        if (wanted.trim() !== "" && actual !== wanted && actual !== `/${wanted}`) {
+          warnings.push(
+            `${part.reference} pin ${number} is on ${actual ?? "no net"}, not ${wanted}.`,
+          );
+        }
+      }
+      return {
+        reference: part.reference,
+        symbol: part.symbol,
+        at: part.at,
+        pins: pins.map((pin) => ({
+          number: pin.pin,
+          ...(pin.function ? { name: pin.function } : {}),
+          ...(pin.connected ? { net: pin.net } : {}),
+        })),
+      };
+    });
+    return {
+      schematic: relative,
+      parts,
+      removed: edited.removed,
+      warnings,
+      erc: { errors: checked.erc.summary.errors, warnings: checked.erc.summary.warnings },
+    } satisfies SchematicEditResult;
+  });
+
   return KicadService.of({
+    schematicEdit,
     upgradeLibraries,
     boardModel,
     designStamp,

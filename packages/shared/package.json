@@ -562,6 +562,10 @@
     "./kicad/symbolLibrary": {
       "types": "./src/kicad/symbolLibrary.ts",
       "import": "./src/kicad/symbolLibrary.ts"
+    },
+    "./kicad/schematicEdit": {
+      "types": "./src/kicad/schematicEdit.ts",
+      "import": "./src/kicad/schematicEdit.ts"
     }
   },
   "scripts": {

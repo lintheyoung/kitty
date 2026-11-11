@@ -69,6 +69,29 @@ export function mergeSymbolLibraries(existing: string | undefined, incoming: str
   return printDoc(target);
 }
 
+/**
+ * JLC's symbols do not say what their pins are electrically, which makes
+ * KiCad's ERC warn about every connection. Pins without a real type become
+ * passive, as do the pins of two-pin parts such as resistors.
+ */
+export function withUsablePinTypes(library: string): string {
+  const root = parseDoc(library);
+  for (const symbol of librarySymbols(root)) {
+    const pins: Array<Array<Node>> = [];
+    const collect = (node: ReadonlyArray<Node>) => {
+      for (const entry of node) {
+        if (head(entry) === "symbol") collect(entry as Array<Node>);
+        if (head(entry) === "pin") pins.push(entry as Array<Node>);
+      }
+    };
+    collect(symbol);
+    for (const pin of pins) {
+      if (pin[1] === "unspecified" || (pins.length <= 2 && pin[1] === "input")) pin[1] = "passive";
+    }
+  }
+  return printDoc(root);
+}
+
 const TABLE_HEAD = { symbol: "sym_lib_table", footprint: "fp_lib_table" } as const;
 
 /**
