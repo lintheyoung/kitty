@@ -36,6 +36,8 @@ import {
   type SchematicEditResult,
   type SchematicHistoryResult,
   type SchematicHistoryStep,
+  type SchematicReviewDecision,
+  type SchematicReviewResult,
 } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { applySchematicEdits, SchematicEditError } from "@t3tools/shared/kicad/schematicEdit";
@@ -149,6 +151,10 @@ export class KicadService extends Context.Service<
     readonly schematicChanges: (
       input: InWorkspace<SchematicChangesInput>,
     ) => Effect.Effect<SchematicChangesResult, HardwareToolError>;
+    /** Keeps or reverts the agent's edits the user has not yet looked at. */
+    readonly schematicReview: (
+      input: InWorkspace<{ readonly path: string; readonly decision: SchematicReviewDecision }>,
+    ) => Effect.Effect<SchematicReviewResult, HardwareToolError>;
     /** Steps back or forward through the edits made with `schematicEdit`. */
     readonly schematicHistory: (
       input: InWorkspace<{ readonly path: string; readonly step: SchematicHistoryStep }>,
@@ -974,6 +980,12 @@ export const make = Effect.fn("KicadService.make")(function* () {
     );
   });
 
+  /** The agent's edits to each schematic that the user has yet to keep or revert. */
+  const reviews = new Map<
+    string,
+    { readonly baseline: string; readonly summary: ReadonlyArray<string>; readonly current: string }
+  >();
+
   const designSource = Effect.fn("KicadService.designSource")(function* (
     input: InWorkspace<{ readonly path: string }>,
   ) {
@@ -996,10 +1008,15 @@ export const make = Effect.fn("KicadService.make")(function* () {
         return undefined;
       }
       budget -= source.value.length;
+      const review = reviews.get(file);
       const loaded: KicadDesignFile = {
         name,
         file: path.relative(root, file),
         source: source.value,
+        // A review only stands while the file is still what the agent left.
+        ...(review && review.current === source.value
+          ? { review: { baseline: review.baseline, summary: review.summary } }
+          : {}),
       };
       return loaded;
     });
@@ -1211,6 +1228,35 @@ export const make = Effect.fn("KicadService.make")(function* () {
     } satisfies SchematicHistoryResult;
   });
 
+  const schematicReview = Effect.fn("KicadService.schematicReview")(function* (
+    input: InWorkspace<{ readonly path: string; readonly decision: SchematicReviewDecision }>,
+  ) {
+    const { file, relative } = yield* resolveDesign(input.workspaceRoot, input.path, ".kicad_sch");
+    const onDisk = yield* fs
+      .readFileString(file)
+      .pipe(Effect.mapError((cause) => failure("invalid_path", cause.message)));
+    const review = reviews.get(file);
+    reviews.delete(file);
+    if (!review || review.current !== onDisk) return { schematic: relative, applied: false };
+    if (input.decision === "revert") {
+      yield* fs
+        .writeFileString(file, review.baseline)
+        .pipe(Effect.mapError((cause) => failure("command_failed", cause.message)));
+      // A revert is one more step of history, so undo brings the agent's work back.
+      const history = historyOf(file, onDisk);
+      history.undo.push({ source: onDisk, summary: review.summary });
+      if (history.undo.length > HISTORY_LIMIT) history.undo.shift();
+      history.redo.length = 0;
+      history.current = review.baseline;
+      yield* recordChange(
+        path.dirname(file),
+        "user",
+        review.summary.map((line) => `Reverted the agent's change: ${line}`),
+      );
+    }
+    return { schematic: relative, applied: true } satisfies SchematicReviewResult;
+  });
+
   const schematicEdit = Effect.fn("KicadService.schematicEdit")(function* (
     input: InWorkspace<SchematicEditInput> & { readonly by?: SchematicChangeAuthor },
   ) {
@@ -1298,6 +1344,19 @@ export const make = Effect.fn("KicadService.make")(function* () {
     history.redo.length = 0;
     history.current = edited.source;
     const author = input.by ?? "agent";
+    const review = reviews.get(file);
+    if (author === "agent") {
+      // Edits in a row are reviewed together, against the file before the first of them.
+      const open = review && review.current === before ? review : undefined;
+      reviews.set(file, {
+        baseline: open?.baseline ?? before,
+        summary: [...(open?.summary ?? []), ...edited.summary],
+        current: edited.source,
+      });
+    } else {
+      // Working on top of the agent's changes keeps them.
+      reviews.delete(file);
+    }
     // The agent hears what the user changed by hand since it last touched the schematic.
     const userChanges =
       author === "agent" ? userChangesSinceAgent(yield* readChanges(directory)) : [];
@@ -1341,6 +1400,7 @@ export const make = Effect.fn("KicadService.make")(function* () {
     schematicEdit,
     schematicChanges,
     schematicHistory,
+    schematicReview,
     upgradeLibraries,
     boardModel,
     designStamp,

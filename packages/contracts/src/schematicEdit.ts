@@ -103,6 +103,17 @@ export const SchematicHistoryResult = Schema.Struct({
 });
 export type SchematicHistoryResult = typeof SchematicHistoryResult.Type;
 
+/** What the user decides about the agent's changes under review. */
+export const SchematicReviewDecision = Schema.Literals(["keep", "revert"]);
+export type SchematicReviewDecision = typeof SchematicReviewDecision.Type;
+
+export const SchematicReviewResult = Schema.Struct({
+  schematic: Schema.String,
+  /** False when there was nothing under review. */
+  applied: Schema.Boolean,
+});
+export type SchematicReviewResult = typeof SchematicReviewResult.Type;
+
 /** Who made a change: the user in the designer, or the agent with sch_edit. */
 export const SchematicChangeAuthor = Schema.Literals(["user", "agent"]);
 export type SchematicChangeAuthor = typeof SchematicChangeAuthor.Type;

@@ -3414,6 +3414,16 @@ export const layerWsRpc = (
               kicadService.schematicHistory({ path: input.path, step: input.step, workspaceRoot }),
             ),
           ),
+        [WS_METHODS.hardwareSchematicReview]: (input) =>
+          requireHardwareWorkspace(input).pipe(
+            Effect.flatMap((workspaceRoot) =>
+              kicadService.schematicReview({
+                path: input.path,
+                decision: input.decision,
+                workspaceRoot,
+              }),
+            ),
+          ),
         [WS_METHODS.hardwareFabExport]: (input) =>
           requireHardwareWorkspace(input).pipe(
             Effect.flatMap((workspaceRoot) =>

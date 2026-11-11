@@ -1,4 +1,5 @@
 import type { Point, Scene, SceneItem } from "@t3tools/shared/kicad/scene";
+import type { SceneDiff } from "@t3tools/shared/kicad/sceneDiff";
 import { MaximizeIcon, MinusIcon, PlusIcon } from "lucide-react";
 import { useEffect, useRef } from "react";
 
@@ -7,7 +8,13 @@ import { cn } from "~/lib/utils";
 import { Button } from "../ui/button";
 import { CanvasController } from "./canvasController.ts";
 import type { Marker } from "./sceneRenderer.ts";
-import { paletteFor, SELECTION_COLOR, SELECTION_COLOR_LIGHT } from "./scenePaint.ts";
+import {
+  DIFF_ADDED_COLOR,
+  DIFF_REMOVED_COLOR,
+  paletteFor,
+  SELECTION_COLOR,
+  SELECTION_COLOR_LIGHT,
+} from "./scenePaint.ts";
 
 const FONT_FAMILY = 'ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif';
 
@@ -23,6 +30,8 @@ export function DesignCanvas(props: {
   /** An item to bring into view, e.g. after cross-probing from the other drawing. */
   readonly reveal?: SceneItem | undefined;
   readonly markers?: ReadonlyArray<Marker> | undefined;
+  /** A change under review, marked on the drawing. */
+  readonly diff?: SceneDiff | undefined;
   readonly onPick: (item: SceneItem | undefined) => void;
   /** Items that can be dragged to a new place, and what to do when one is dropped. */
   readonly movable?: ((item: SceneItem) => boolean) | undefined;
@@ -42,7 +51,7 @@ export function DesignCanvas(props: {
   };
   const { scene, dark, hidden, selectedIds, focus, onPick, reveal, markers, movable, onMove } =
     props;
-  const { onWire } = props;
+  const { onWire, diff } = props;
   // The board always sits on a dark canvas, so its selection outline stays light.
   const lightSurface = scene.kind === "schematic" && !dark;
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- pushes the latest drawing and options into the imperative canvas controller
@@ -61,6 +70,14 @@ export function DesignCanvas(props: {
         focus,
         fontFamily: FONT_FAMILY,
         markers,
+        diff: diff
+          ? {
+              added: diff.added,
+              removed: diff.removed,
+              addedColor: DIFF_ADDED_COLOR,
+              removedColor: DIFF_REMOVED_COLOR,
+            }
+          : undefined,
       },
     });
   }, [
@@ -75,6 +92,7 @@ export function DesignCanvas(props: {
     movable,
     onMove,
     onWire,
+    diff,
   ]);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- scrolls the imperative canvas to an item chosen outside it
   useEffect(() => {

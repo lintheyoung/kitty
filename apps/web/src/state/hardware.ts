@@ -242,6 +242,11 @@ export const hardwareSchematicHistory = createEnvironmentRpcCommand(connectionAt
   label: "environment-data:hardware:schematic-history",
   tag: WS_METHODS.hardwareSchematicHistory,
 });
+/** Keeps or reverts the agent's changes the designer is showing for review. */
+export const hardwareSchematicReview = createEnvironmentRpcCommand(connectionAtomRuntime, {
+  label: "environment-data:hardware:schematic-review",
+  tag: WS_METHODS.hardwareSchematicReview,
+});
 export const hardwareFabExport = createEnvironmentRpcCommand(connectionAtomRuntime, {
   label: "environment-data:hardware:fab-export",
   tag: WS_METHODS.hardwareFabExport,

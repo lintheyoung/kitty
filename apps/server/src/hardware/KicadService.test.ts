@@ -336,6 +336,13 @@ it.effect("edits a schematic, reports what KiCad resolved, and undoes it", () =>
         const saved = yield* fs.readFileString(file);
         assert.include(saved, '(lib_id "jlc:R")');
 
+        // The agent's edit waits for the user, with the sheet as it was before.
+        const shown = yield* service.designSource(target);
+        assert.deepStrictEqual(shown.sheets[0]?.review, {
+          baseline: EDIT_SHEET,
+          summary: ["Placed R1 (jlc:R, 10k) with pins 1=+3V3, 2=EN"],
+        });
+
         const undone = yield* service.schematicHistory({ ...target, step: "undo" });
         assert.deepStrictEqual(undone, { ...undone, applied: true, undo: 0, redo: 1 });
         assert.equal(yield* fs.readFileString(file), EDIT_SHEET);
@@ -370,6 +377,29 @@ it.effect("edits a schematic, reports what KiCad resolved, and undoes it", () =>
           "Set R1 Value to 47k",
         ]);
         assert.deepStrictEqual((yield* service.schematicChanges(target)).userChanges, []);
+
+        // The user's own edit closed the first review; the agent's next one opens another.
+        const kept = yield* fs.readFileString(file);
+        yield* service.schematicEdit({
+          ...target,
+          edits: [{ op: "set", reference: "R1", property: "Value", value: "33k" }],
+        });
+        const pending = (yield* service.designSource(target)).sheets[0]?.review;
+        assert.deepStrictEqual(pending?.summary, ["Set R1 Value to 22k", "Set R1 Value to 33k"]);
+        const reverted = yield* service.schematicReview({ ...target, decision: "revert" });
+        assert.equal(reverted.applied, true);
+        assert.notEqual(yield* fs.readFileString(file), kept);
+        assert.include(yield* fs.readFileString(file), "47k");
+        assert.equal((yield* service.designSource(target)).sheets[0]?.review, undefined);
+        assert.deepStrictEqual((yield* service.schematicChanges(target)).userChanges, [
+          "Reverted the agent's change: Set R1 Value to 22k",
+          "Reverted the agent's change: Set R1 Value to 33k",
+        ]);
+        // Undo takes the revert back; there is then nothing left to decide.
+        yield* service.schematicHistory({ ...target, step: "undo" });
+        assert.include(yield* fs.readFileString(file), "33k");
+        const nothing = yield* service.schematicReview({ ...target, decision: "keep" });
+        assert.equal(nothing.applied, false);
 
         // A save from somewhere else starts the history over.
         yield* fs.writeFileString(file, EDIT_SHEET);

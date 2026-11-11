@@ -27,6 +27,30 @@ export interface DrawOptions {
   readonly fontFamily: string;
   /** Problems found by a check, drawn at a fixed screen size over the drawing. */
   readonly markers?: ReadonlyArray<Marker> | undefined;
+  /** A change under review: what it added is marked, what it removed is drawn back in. */
+  readonly diff?: DiffOverlay | undefined;
+}
+
+export interface DiffOverlay {
+  readonly added: ReadonlySet<string>;
+  readonly removed: ReadonlyArray<SceneItem>;
+  readonly addedColor: string;
+  readonly removedColor: string;
+}
+
+/** A translucent block behind an item, like a highlighter over it. */
+function highlight(ctx: CanvasRenderingContext2D, box: Box, color: string, view: View) {
+  const pad = Math.max(0.6, 3 / view.scale);
+  const [x, y] = [box.minX - pad, box.minY - pad];
+  const [width, height] = [box.maxX - box.minX + pad * 2, box.maxY - box.minY + pad * 2];
+  ctx.fillStyle = color;
+  ctx.strokeStyle = color;
+  ctx.globalAlpha = 0.22;
+  ctx.fillRect(x, y, width, height);
+  ctx.globalAlpha = 0.9;
+  ctx.lineWidth = 1 / view.scale;
+  ctx.strokeRect(x, y, width, height);
+  ctx.globalAlpha = 1;
 }
 
 export interface Marker {
@@ -231,6 +255,12 @@ export function drawScene(
     maxX: (width - view.x) / view.scale + margin,
     maxY: (height - view.y) / view.scale + margin,
   };
+  const { diff } = options;
+  if (diff) {
+    for (const item of scene.items) {
+      if (diff.added.has(item.id)) highlight(ctx, item.box, diff.addedColor, view);
+    }
+  }
   for (const [paint, entries] of prepare(scene)) {
     if (options.hidden.has(paint)) continue;
     const color = options.color(paint);
@@ -244,6 +274,24 @@ export function drawScene(
     }
   }
   ctx.globalAlpha = 1;
+  if (diff) {
+    // What the change took away is drawn back in one colour, over the new drawing.
+    const removedOptions = { ...options, color: () => diff.removedColor };
+    for (const item of diff.removed) {
+      highlight(ctx, item.box, diff.removedColor, view);
+      ctx.strokeStyle = diff.removedColor;
+      ctx.fillStyle = diff.removedColor;
+      ctx.globalAlpha = 0.75;
+      for (const shape of item.shapes) {
+        // Filled bodies would hide what is there now, so only outlines are drawn.
+        if (shape.kind === "polygon" || shape.kind === "circle") {
+          const { fill: _fill, ...outline } = shape;
+          drawShape(ctx, outline, view, removedOptions);
+        } else drawShape(ctx, shape, view, removedOptions);
+      }
+    }
+    ctx.globalAlpha = 1;
+  }
   if (options.markers) drawMarkers(ctx, options.markers, view);
   if (options.selection.size === 0) return;
   ctx.strokeStyle = options.selectionColor;

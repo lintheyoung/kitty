@@ -223,6 +223,7 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.hardwareJlcImport]: AuthOrchestrationOperateScope,
   [WS_METHODS.hardwareSchematicEdit]: AuthOrchestrationOperateScope,
   [WS_METHODS.hardwareSchematicHistory]: AuthOrchestrationOperateScope,
+  [WS_METHODS.hardwareSchematicReview]: AuthOrchestrationOperateScope,
   [WS_METHODS.hardwareTestPlans]: AuthOrchestrationReadScope,
   [WS_METHODS.hardwareTestCreate]: AuthOrchestrationOperateScope,
   [WS_METHODS.hardwareTestRun]: AuthOrchestrationOperateScope,

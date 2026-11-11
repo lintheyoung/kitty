@@ -328,6 +328,7 @@ import {
   HardwareJlcImportInput,
   HardwareSchematicEditInput,
   HardwareSchematicHistoryInput,
+  HardwareSchematicReviewInput,
   HardwarePreviewInput,
   HardwareProjectTestCreateInput,
   HardwareProjectTestRunInput,
@@ -352,7 +353,11 @@ import {
   HardwarePinmapSyncResult,
 } from "./kicad.ts";
 import { JlcImportedPart, JlcPartSearchInput, JlcPartSearchResult } from "./jlcParts.ts";
-import { SchematicEditResult, SchematicHistoryResult } from "./schematicEdit.ts";
+import {
+  SchematicEditResult,
+  SchematicHistoryResult,
+  SchematicReviewResult,
+} from "./schematicEdit.ts";
 import {
   ServerConfigStreamEvent,
   DesktopUpdateCommitInput,
@@ -558,6 +563,7 @@ export const WS_METHODS = {
   hardwareJlcImport: "hardware.jlcImport",
   hardwareSchematicEdit: "hardware.schematicEdit",
   hardwareSchematicHistory: "hardware.schematicHistory",
+  hardwareSchematicReview: "hardware.schematicReview",
   hardwareTestPlans: "hardware.testPlans",
   hardwareTestCreate: "hardware.testCreate",
   hardwareTestRun: "hardware.testRun",
@@ -1909,6 +1915,12 @@ const WsHardwareSchematicHistoryRpc = Rpc.make(WS_METHODS.hardwareSchematicHisto
   error: Schema.Union([HardwareToolError, EnvironmentAuthorizationError]),
 });
 
+const WsHardwareSchematicReviewRpc = Rpc.make(WS_METHODS.hardwareSchematicReview, {
+  payload: HardwareSchematicReviewInput,
+  success: SchematicReviewResult,
+  error: Schema.Union([HardwareToolError, EnvironmentAuthorizationError]),
+});
+
 const WsHardwareFabExportRpc = Rpc.make(WS_METHODS.hardwareFabExport, {
   payload: HardwareDesignInput,
   success: KicadFabExportResult,
@@ -2445,6 +2457,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsHardwareJlcImportRpc,
   WsHardwareSchematicEditRpc,
   WsHardwareSchematicHistoryRpc,
+  WsHardwareSchematicReviewRpc,
   WsHardwareTestPlansRpc,
   WsHardwareTestCreateRpc,
   WsHardwareTestRunRpc,

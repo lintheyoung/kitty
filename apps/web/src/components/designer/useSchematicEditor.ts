@@ -5,12 +5,17 @@ import type {
   SchematicEdit,
   SchematicEditResult,
   SchematicHistoryStep,
+  SchematicReviewDecision,
   ThreadId,
 } from "@t3tools/contracts";
 import { useState } from "react";
 
 import { appAtomRegistry } from "../../rpc/atomRegistry";
-import { hardwareSchematicEdit, hardwareSchematicHistory } from "../../state/hardware";
+import {
+  hardwareSchematicEdit,
+  hardwareSchematicHistory,
+  hardwareSchematicReview,
+} from "../../state/hardware";
 import { formatEnvironmentQueryError } from "../../state/query";
 
 interface Target {
@@ -67,5 +72,22 @@ export function useSchematicEditor(target: Target, onChanged: () => void) {
     onChanged();
   };
 
-  return { busy, message, apply, step };
+  /** Keeps or reverts the agent's changes that are shown for review. */
+  const review = async (decision: SchematicReviewDecision) => {
+    const { environmentId, threadId, projectId, path } = target;
+    if (!path || busy) return;
+    setBusy(true);
+    setMessage(undefined);
+    const result = await runAtomCommand(
+      appAtomRegistry,
+      hardwareSchematicReview,
+      { environmentId, input: { threadId, projectId, path, decision } },
+      options,
+    );
+    setBusy(false);
+    if (result._tag !== "Success") return setMessage(formatEnvironmentQueryError(result.cause));
+    onChanged();
+  };
+
+  return { busy, message, apply, step, review };
 }

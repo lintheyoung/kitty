@@ -2,6 +2,7 @@ import type { KicadDesignSourceResult, ProjectId, ScopedThreadRef } from "@t3too
 import { buildBoardScene } from "@t3tools/shared/kicad/boardScene";
 import { displayNet, sameNet } from "@t3tools/shared/kicad/pick";
 import type { Scene, SceneItem } from "@t3tools/shared/kicad/scene";
+import { diffScenes, type SceneDiff } from "@t3tools/shared/kicad/sceneDiff";
 import { buildSchematicScene } from "@t3tools/shared/kicad/schematicScene";
 import {
   ArrowLeftRightIcon,
@@ -31,7 +32,13 @@ import { DesignCanvas } from "./DesignCanvas";
 import { PartSearch } from "./PartSearch";
 import { ProblemList } from "./ProblemList";
 import { boardProblems, countProblems, sheetProblems } from "./problems.ts";
-import { layerLabel, paletteFor, shownByDefault } from "./scenePaint.ts";
+import {
+  DIFF_ADDED_COLOR,
+  DIFF_REMOVED_COLOR,
+  layerLabel,
+  paletteFor,
+  shownByDefault,
+} from "./scenePaint.ts";
 import { type Marker, scenePaints } from "./sceneRenderer.ts";
 import { useDesignChecks, useDesignWatcher } from "./useDesignChecks.ts";
 import { useSchematicEditor } from "./useSchematicEditor.ts";
@@ -44,6 +51,27 @@ interface Drawing {
   readonly file: string;
   readonly scene?: Scene;
   readonly error?: string;
+  /** The agent's changes to this drawing that are waiting for the user. */
+  readonly review?: Review;
+}
+
+interface Review {
+  readonly diff: SceneDiff;
+  readonly summary: ReadonlyArray<string>;
+}
+
+/** The agent's unreviewed changes to a sheet, or nothing if they cannot be drawn. */
+function reviewOf(
+  sheet: KicadDesignSourceResult["sheets"][number],
+  scene: Scene,
+): Review | undefined {
+  if (!sheet.review) return undefined;
+  try {
+    const before = buildSchematicScene(sheet.review.baseline).scene;
+    return { diff: diffScenes(before, scene), summary: sheet.review.summary };
+  } catch {
+    return undefined;
+  }
 }
 
 /** What is selected, kept in terms that carry across the schematic and the board. */
@@ -63,14 +91,16 @@ function parseDrawings(source: KicadDesignSourceResult): ReadonlyArray<Drawing> 
     }
   };
   return [
-    ...source.sheets.map((sheet, index) =>
-      read(
+    ...source.sheets.map((sheet, index) => {
+      const drawing = read(
         `sheet:${sheet.file}`,
         index === 0 ? "Schematic" : sheet.name,
         sheet.file,
         () => buildSchematicScene(sheet.source).scene,
-      ),
-    ),
+      );
+      const review = drawing.scene ? reviewOf(sheet, drawing.scene) : undefined;
+      return review ? { ...drawing, review } : drawing;
+    }),
     ...(source.board
       ? [read("board", "PCB", source.board.file, () => buildBoardScene(source.board?.source ?? ""))]
       : []),
@@ -298,6 +328,64 @@ function Properties(props: {
             )}
           </div>
         ) : null}
+      </div>
+    </div>
+  );
+}
+
+const REVIEW_LINES = 5;
+
+/** The agent's changes, marked on the drawing, for the user to keep or take back. */
+function ReviewBar(props: {
+  readonly review: Review;
+  readonly busy: boolean;
+  readonly onShow: () => void;
+  readonly onKeep: () => void;
+  readonly onRevert: () => void;
+}) {
+  const { summary, diff } = props.review;
+  const more = summary.length - REVIEW_LINES;
+  return (
+    <div className="absolute top-2 left-2 flex max-h-[50%] w-72 flex-col rounded-md border bg-background/95 text-xs shadow-md">
+      <div className="flex items-center gap-2 border-b px-2 py-1.5">
+        <div className="min-w-0 flex-1">
+          <div className="text-sm font-medium">Kitty changed the schematic</div>
+          <div className="flex items-center gap-1.5 text-muted-foreground">
+            <span
+              className="size-2 shrink-0 rounded-sm"
+              style={{ backgroundColor: DIFF_ADDED_COLOR }}
+            />
+            {diff.added.size} added or changed
+            <span
+              className="size-2 shrink-0 rounded-sm"
+              style={{ backgroundColor: DIFF_REMOVED_COLOR }}
+            />
+            {diff.removed.length} removed
+          </div>
+        </div>
+        {diff.box ? (
+          <Button size="xs" variant="ghost" onClick={props.onShow}>
+            Show
+          </Button>
+        ) : null}
+      </div>
+      <div className="min-h-0 overflow-y-auto px-2 py-1.5">
+        {summary.slice(0, REVIEW_LINES).map((line, index) => (
+          // oxlint-disable-next-line react/no-array-index-key -- the lines are a fixed list and may repeat
+          <div key={index} className="break-words py-0.5">
+            {line}
+          </div>
+        ))}
+        {more > 0 ? <div className="py-0.5 text-muted-foreground">and {more} more</div> : null}
+      </div>
+      <div className="flex items-center gap-1.5 border-t px-2 py-1.5">
+        <Button size="xs" disabled={props.busy} onClick={props.onKeep}>
+          Keep
+        </Button>
+        <Button size="xs" variant="outline" disabled={props.busy} onClick={props.onRevert}>
+          Revert
+        </Button>
+        <span className="min-w-0 text-muted-foreground">Editing the sheet keeps them too.</span>
       </div>
     </div>
   );
@@ -689,6 +777,7 @@ function DesignerView(props: {
               focus={focus}
               reveal={reveal}
               markers={markers}
+              diff={current?.review?.diff}
               onPick={pick}
               onWire={
                 editable && wiring
@@ -705,6 +794,21 @@ function DesignerView(props: {
                 {scene.kind === "board" ? "The board is empty." : "This sheet is empty."} Ask Kitty
                 to design it, or draw it in KiCad.
               </div>
+            ) : null}
+            {current?.review ? (
+              <ReviewBar
+                review={current.review}
+                busy={editor.busy}
+                onShow={() => {
+                  const box = current.review?.diff.box;
+                  if (box) setReveal({ id: "review", kind: "graphic", shapes: [], box });
+                }}
+                onKeep={() => void editor.review("keep")}
+                onRevert={() => {
+                  setSelection(undefined);
+                  void editor.review("revert");
+                }}
+              />
             ) : null}
             {showLayers && scene.kind === "board" ? (
               <LayerList

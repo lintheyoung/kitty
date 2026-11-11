@@ -195,6 +195,15 @@ export const KicadDesignFile = Schema.Struct({
   /** The file, relative to the workspace. */
   file: Schema.String,
   source: Schema.String,
+  /** The agent's changes to this file that the user has not yet kept or reverted. */
+  review: Schema.optional(
+    Schema.Struct({
+      /** The file as it was before the agent changed it. */
+      baseline: Schema.String,
+      /** What the agent did, one line per edit. */
+      summary: Schema.Array(Schema.String),
+    }),
+  ),
 });
 export type KicadDesignFile = typeof KicadDesignFile.Type;
 

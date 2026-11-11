@@ -566,6 +566,10 @@
     "./kicad/schematicEdit": {
       "types": "./src/kicad/schematicEdit.ts",
       "import": "./src/kicad/schematicEdit.ts"
+    },
+    "./kicad/sceneDiff": {
+      "types": "./src/kicad/sceneDiff.ts",
+      "import": "./src/kicad/sceneDiff.ts"
     }
   },
   "scripts": {
