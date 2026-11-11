@@ -1,4 +1,6 @@
 import {
+  type BoardSyncInput,
+  type BoardSyncResult,
   HardwareToolError,
   type KicadBomInput,
   type KicadBomResult,
@@ -56,6 +58,14 @@ import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as SchemaIssue from "effect/SchemaIssue";
 
 import * as ProcessRunner from "../processRunner.ts";
+import {
+  BOARD_SYNC_SCRIPT,
+  boardSyncJob,
+  boardSyncPlan,
+  footprintLibraries,
+  kicadPythonCandidates,
+  parseSyncReport,
+} from "./boardSync.ts";
 import { logTail } from "./buildOutput.ts";
 import {
   buildBom,
@@ -151,6 +161,10 @@ export class KicadService extends Context.Service<
     readonly schematicChanges: (
       input: InWorkspace<SchematicChangesInput>,
     ) => Effect.Effect<SchematicChangesResult, HardwareToolError>;
+    /** Brings the schematic's parts and nets onto the board. */
+    readonly boardSync: (
+      input: InWorkspace<BoardSyncInput>,
+    ) => Effect.Effect<BoardSyncResult, HardwareToolError>;
     /** Keeps or reverts the agent's edits the user has not yet looked at. */
     readonly schematicReview: (
       input: InWorkspace<{ readonly path: string; readonly decision: SchematicReviewDecision }>,
@@ -412,6 +426,88 @@ export const make = Effect.fn("KicadService.make")(function* () {
     );
     const netlist = yield* parseOrFail(() => parseNetlist(text), "netlist");
     return { ...design, netlist };
+  });
+
+  const boardSync = Effect.fn("KicadService.boardSync")(function* (
+    input: InWorkspace<BoardSyncInput>,
+  ) {
+    const board = yield* resolveDesign(input.workspaceRoot, input.path, ".kicad_pcb");
+    const directory = path.dirname(board.file);
+    const schematic = yield* resolveDesign(input.workspaceRoot, directory, ".kicad_sch").pipe(
+      Effect.mapError(() =>
+        failure("invalid_path", `${board.relative} has no schematic beside it to take parts from.`),
+      ),
+    );
+    const netlistText = yield* runToFile(
+      (output) => [
+        "sch",
+        "export",
+        "netlist",
+        "--format",
+        "kicadsexpr",
+        "-o",
+        output,
+        schematic.file,
+      ],
+      directory,
+      "netlist.net",
+    );
+    const plan = yield* parseOrFail(() => boardSyncPlan(netlistText), "netlist");
+    const cli = yield* findCli();
+    const env = yield* HostProcess.Environment;
+    const table = yield* fs
+      .readFileString(path.join(directory, "fp-lib-table"))
+      .pipe(Effect.option);
+    const libraries = footprintLibraries(
+      Option.getOrUndefined(table),
+      directory,
+      new Set(plan.components.map((part) => part.footprint.split(":")[0] ?? "")),
+      kicadSymbolDirectories(cli, env).map((symbols) =>
+        path.join(path.dirname(symbols), "footprints"),
+      ),
+    );
+    const io = <A, E extends { readonly message: string }, R>(effect: Effect.Effect<A, E, R>) =>
+      effect.pipe(Effect.mapError((cause) => failure("command_failed", cause.message)));
+    const report = yield* Effect.scoped(
+      Effect.gen(function* () {
+        const temp = yield* io(fs.makeTempDirectoryScoped({ prefix: "kitty-pcb-" }));
+        const script = path.join(temp, "sync.py");
+        const job = path.join(temp, "job.json");
+        yield* io(fs.writeFileString(script, BOARD_SYNC_SCRIPT));
+        yield* io(fs.writeFileString(job, boardSyncJob(board.file, plan.components, libraries)));
+        // KiCad's own Python writes the board, so the file is exactly what KiCad would save.
+        let last =
+          "KiCad's Python (the pcbnew module) was not found. Install KiCad 10 or set KITTY_KICAD_PYTHON.";
+        for (const python of kicadPythonCandidates(env, cli)) {
+          const run = yield* processRunner
+            .run({
+              command: python,
+              args: [script, job],
+              cwd: directory,
+              timeout: "2 minutes",
+              outputMode: "truncate",
+              timeoutBehavior: "timedOutResult",
+            })
+            .pipe(Effect.option);
+          if (Option.isNone(run)) continue;
+          const parsed = parseSyncReport(run.value.stdout);
+          if (parsed) return parsed;
+          const output = `${run.value.stdout}\n${run.value.stderr}`;
+          // A Python without pcbnew is not KiCad's; the next candidate may be.
+          if (output.includes("No module named")) continue;
+          last = `KiCad could not update the board, so it was left as it was.\n${logTail(output, 8)}`;
+          break;
+        }
+        return yield* failure("command_failed", last);
+      }),
+    );
+    return {
+      board: board.relative,
+      ...report,
+      missing: [...report.missing],
+      withoutFootprint: [...plan.withoutFootprint],
+      parts: plan.components.length - report.missing.length,
+    } satisfies BoardSyncResult;
   });
 
   const MAX_NETS = 300;
@@ -1420,6 +1516,7 @@ export const make = Effect.fn("KicadService.make")(function* () {
     schematicChanges,
     schematicHistory,
     schematicReview,
+    boardSync,
     upgradeLibraries,
     boardModel,
     designStamp,

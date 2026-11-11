@@ -247,6 +247,11 @@ export const hardwareSchematicReview = createEnvironmentRpcCommand(connectionAto
   label: "environment-data:hardware:schematic-review",
   tag: WS_METHODS.hardwareSchematicReview,
 });
+/** Brings the schematic's parts and nets onto the board. */
+export const hardwareBoardSync = createEnvironmentRpcCommand(connectionAtomRuntime, {
+  label: "environment-data:hardware:board-sync",
+  tag: WS_METHODS.hardwareBoardSync,
+});
 export const hardwareFabExport = createEnvironmentRpcCommand(connectionAtomRuntime, {
   label: "environment-data:hardware:fab-export",
   tag: WS_METHODS.hardwareFabExport,

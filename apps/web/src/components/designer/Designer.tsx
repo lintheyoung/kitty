@@ -6,6 +6,7 @@ import { diffScenes, type SceneDiff } from "@t3tools/shared/kicad/sceneDiff";
 import { buildSchematicScene } from "@t3tools/shared/kicad/schematicScene";
 import {
   ArrowLeftRightIcon,
+  ArrowRightToLineIcon,
   CheckIcon,
   ChevronRightIcon,
   LayersIcon,
@@ -28,11 +29,15 @@ import { useComposerDraftStore } from "~/composerDraftStore";
 import { useTheme } from "~/hooks/useTheme";
 import { cn } from "~/lib/utils";
 
-import { hardwareDesigns, hardwareDesignSource } from "../../state/hardware";
-import { useEnvironmentQuery } from "../../state/query";
+import { runAtomCommand } from "@t3tools/client-runtime/state/runtime";
+
+import { appAtomRegistry } from "../../rpc/atomRegistry";
+import { hardwareBoardSync, hardwareDesigns, hardwareDesignSource } from "../../state/hardware";
+import { formatEnvironmentQueryError, useEnvironmentQuery } from "../../state/query";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { BoardModelView } from "./BoardModelView";
+import { boardSyncSummary } from "./boardSyncSummary.ts";
 import { DesignCanvas } from "./DesignCanvas";
 import { designMention, withMention, withRequest } from "./designMention.ts";
 import { currentStep, type DesignStep, designSteps } from "./designSteps.ts";
@@ -523,6 +528,9 @@ function DesignerView(props: {
   const [showParts, setShowParts] = useState(false);
   const [wiring, setWiring] = useState(false);
   const [activeProblem, setActiveProblem] = useState<string | undefined>();
+  const [sync, setSync] = useState<{ busy: boolean; note?: string; failed?: boolean }>({
+    busy: false,
+  });
 
   const loaded = useEnvironmentQuery(
     project ? hardwareDesignSource({ environmentId, input: { ...target, path: project } }) : null,
@@ -707,6 +715,25 @@ function DesignerView(props: {
     store.setPrompt(props.threadRef, withRequest(prompt, step.prompt));
   };
 
+  /** Brings the schematic's parts and nets onto the board. */
+  const syncBoard = async () => {
+    if (!project || sync.busy) return;
+    setSync({ busy: true });
+    const result = await runAtomCommand(
+      appAtomRegistry,
+      hardwareBoardSync,
+      { environmentId, input: { ...target, path: project } },
+      { reportFailure: false },
+    );
+    if (result._tag === "Success") {
+      setSync({ busy: false, note: boardSyncSummary(result.value) });
+      loaded.refresh();
+      if (checked) void runChecks();
+    } else {
+      setSync({ busy: false, note: formatEnvironmentQueryError(result.cause), failed: true });
+    }
+  };
+
   const pick = (item: SceneItem | undefined) => {
     setReveal(undefined);
     if (!item || !scene) return setSelection(undefined);
@@ -841,6 +868,17 @@ function DesignerView(props: {
           >
             <PackageSearchIcon />
             Parts
+          </Button>
+        ) : null}
+        {scene?.kind === "board" && !showModel && (source?.sheets.length ?? 0) > 0 ? (
+          <Button
+            size="xs"
+            variant="ghost-muted"
+            disabled={sync.busy}
+            onClick={() => void syncBoard()}
+          >
+            <ArrowRightToLineIcon className={cn(sync.busy && "animate-pulse")} />
+            {sync.busy ? "Updating…" : "Update from schematic"}
           </Button>
         ) : null}
         {scene?.kind === "board" && !showModel ? (
@@ -1042,6 +1080,11 @@ function DesignerView(props: {
           <span className="truncate text-destructive-foreground">{checks.error}</span>
         ) : null}
         {editor.busy ? <span className="shrink-0">Saving…</span> : null}
+        {sync.note && scene?.kind === "board" ? (
+          <span className={cn("truncate", sync.failed && "text-destructive-foreground")}>
+            {sync.note}
+          </span>
+        ) : null}
         {editable && wiring ? (
           <span className="shrink-0">
             Click a pin to start a wire, click to add corners, click a pin to finish. Esc to stop.

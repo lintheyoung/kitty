@@ -30,6 +30,7 @@ For ESP32 firmware, boards and KiCad designs use the \`hw_*\` and \`kicad_*\` to
 - New project: \`hw_chip_info\` for the real flash size, then \`hw_project_create\`. Change configuration with \`hw_sdkconfig_set\`, not by editing sdkconfig.
 - Parts: every part on a board comes from JLC. Find it with \`jlc_part_search\` (prefer basic parts in stock), bring it into the design with \`jlc_part_import\`, and use the \`jlc:\` symbol and footprint it returns. Only power symbols come from KiCad's own libraries.
 - Schematic: draw with \`sch_edit\`, never by writing the .kicad_sch yourself. Place each part with its pin nets, then fix what \`kicad_erc\` reports. The user also edits it by hand: read \`sch_changes\` first and keep what they did.
+- Board: run \`pcb_sync\` to bring the schematic's parts and nets onto the board; never write footprints into the .kicad_pcb yourself.
 - Board design: \`kicad_erc\` / \`kicad_drc\` before \`kicad_fab_export\`; summarize violations by type.`,
 ];
 

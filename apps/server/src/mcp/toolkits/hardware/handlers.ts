@@ -119,6 +119,12 @@ export const layer = McpToolAccess.toLayer(HardwareToolkit, {
       return yield* kicad.drc({ ...input, workspaceRoot: yield* callerWorkspaceRoot() });
     }),
   ),
+  pcb_sync: McpToolAccess.actsAsCaller((input) =>
+    Effect.gen(function* () {
+      const kicad = yield* KicadService.KicadService;
+      return yield* kicad.boardSync({ ...input, workspaceRoot: yield* callerWorkspaceRoot() });
+    }),
+  ),
   kicad_netlist: McpToolAccess.actsAsCaller((input) =>
     Effect.gen(function* () {
       const kicad = yield* KicadService.KicadService;

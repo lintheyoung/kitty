@@ -43,6 +43,8 @@ import {
   SchematicEditInput,
   SchematicEditResult,
   KicadBomResult,
+  BoardSyncInput,
+  BoardSyncResult,
   KicadDrcInput,
   KicadDrcResult,
   KicadErcInput,
@@ -253,6 +255,19 @@ const KicadDrcTool = Tool.make("kicad_drc", {
   .annotate(Tool.Idempotent, true)
   .annotate(Tool.OpenWorld, false);
 
+const BoardSyncTool = Tool.make("pcb_sync", {
+  description:
+    "Bring the schematic onto the board, like KiCad's Update PCB from Schematic: every part with a footprint gets its footprint with pads on the right nets. New parts are set down in rows beside the board, block by block, for placing; parts already placed keep their place and get their value and nets updated; parts gone from the schematic are removed. Run it after the schematic changes and before placing or routing. `missing` lists footprints no library has.",
+  parameters: BoardSyncInput,
+  success: BoardSyncResult,
+  failure: HardwareFailure,
+  dependencies: kicadDependencies,
+})
+  .annotate(Tool.Title, "Update board from schematic")
+  .annotate(Tool.Destructive, false)
+  .annotate(Tool.Idempotent, true)
+  .annotate(Tool.OpenWorld, false);
+
 const KicadNetlistTool = Tool.make("kicad_netlist", {
   description:
     "Read a schematic's components and connections. Pass component (e.g. U1) to get that part's pin-to-net table: use it to learn which MCU GPIO connects to which sensor, LED or button before writing firmware.",
@@ -452,6 +467,7 @@ export const HardwareToolkit = Toolkit.make(
   HardwareFlashTool,
   KicadErcTool,
   KicadDrcTool,
+  BoardSyncTool,
   KicadNetlistTool,
   KicadBomTool,
   KicadFabExportTool,

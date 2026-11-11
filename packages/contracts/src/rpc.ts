@@ -343,6 +343,7 @@ import {
   HardwareProjectNewResult,
   KicadBomResult,
   KicadDesignsResult,
+  BoardSyncResult,
   KicadDrcResult,
   KicadErcResult,
   KicadFabExportResult,
@@ -551,6 +552,7 @@ export const WS_METHODS = {
   hardwareDesigns: "hardware.designs",
   hardwareErc: "hardware.erc",
   hardwareDrc: "hardware.drc",
+  hardwareBoardSync: "hardware.boardSync",
   hardwareBom: "hardware.bom",
   hardwareFabExport: "hardware.fabExport",
   hardwarePinmapSync: "hardware.pinmapSync",
@@ -1921,6 +1923,12 @@ const WsHardwareSchematicReviewRpc = Rpc.make(WS_METHODS.hardwareSchematicReview
   error: Schema.Union([HardwareToolError, EnvironmentAuthorizationError]),
 });
 
+const WsHardwareBoardSyncRpc = Rpc.make(WS_METHODS.hardwareBoardSync, {
+  payload: HardwareDesignInput,
+  success: BoardSyncResult,
+  error: Schema.Union([HardwareToolError, EnvironmentAuthorizationError]),
+});
+
 const WsHardwareFabExportRpc = Rpc.make(WS_METHODS.hardwareFabExport, {
   payload: HardwareDesignInput,
   success: KicadFabExportResult,
@@ -2458,6 +2466,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsHardwareSchematicEditRpc,
   WsHardwareSchematicHistoryRpc,
   WsHardwareSchematicReviewRpc,
+  WsHardwareBoardSyncRpc,
   WsHardwareTestPlansRpc,
   WsHardwareTestCreateRpc,
   WsHardwareTestRunRpc,

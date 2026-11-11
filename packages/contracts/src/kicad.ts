@@ -188,6 +188,31 @@ export const KicadPreviewResult = Schema.Struct({
 });
 export type KicadPreviewResult = typeof KicadPreviewResult.Type;
 
+export const BoardSyncInput = Schema.Struct({
+  path: Schema.String.annotate({
+    description: "The design: its .kicad_pcb, .kicad_pro or directory, relative to the workspace.",
+  }),
+});
+export type BoardSyncInput = typeof BoardSyncInput.Type;
+
+/** What bringing the schematic onto the board changed. */
+export const BoardSyncResult = Schema.Struct({
+  board: Schema.String,
+  /** Parts new on the board, set down beside it, still to be placed. */
+  added: Schema.Array(Schema.String),
+  /** Parts whose value, footprint or nets changed. */
+  updated: Schema.Array(Schema.String),
+  /** Parts taken off the board because the schematic no longer has them. */
+  removed: Schema.Array(Schema.String),
+  /** Parts whose footprint is not in any library. */
+  missing: Schema.Array(Schema.Struct({ ref: Schema.String, footprint: Schema.String })),
+  /** Parts the schematic gives no footprint. */
+  withoutFootprint: Schema.Array(Schema.String),
+  /** How many parts the board holds now. */
+  parts: Schema.Int,
+});
+export type BoardSyncResult = typeof BoardSyncResult.Type;
+
 /** The text of one design file, for the client to draw. */
 export const KicadDesignFile = Schema.Struct({
   /** Sheet name, or "Board". */
