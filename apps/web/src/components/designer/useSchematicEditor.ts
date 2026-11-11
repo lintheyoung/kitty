@@ -1,5 +1,7 @@
 import { runAtomCommand } from "@t3tools/client-runtime/state/runtime";
 import type {
+  BoardEdit,
+  BoardEditResult,
   EnvironmentId,
   ProjectId,
   SchematicEdit,
@@ -12,6 +14,7 @@ import { useState } from "react";
 
 import { appAtomRegistry } from "../../rpc/atomRegistry";
 import {
+  hardwareBoardEdit,
   hardwareSchematicEdit,
   hardwareSchematicHistory,
   hardwareSchematicReview,
@@ -28,7 +31,7 @@ interface Target {
 
 const options = { reportFailure: false } as const;
 
-/** Makes changes to a design's schematic and steps through their history. */
+/** Makes changes to a design's schematic and board and steps through their history. */
 export function useSchematicEditor(target: Target, onChanged: () => void) {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | undefined>();
@@ -55,7 +58,30 @@ export function useSchematicEditor(target: Target, onChanged: () => void) {
     return result.value;
   };
 
-  const step = async (direction: SchematicHistoryStep) => {
+  /** Moves parts on the board or sets its outline. */
+  const applyBoard = async (
+    edits: ReadonlyArray<BoardEdit>,
+  ): Promise<BoardEditResult | undefined> => {
+    const { environmentId, threadId, projectId, path } = target;
+    if (!path || busy) return undefined;
+    setBusy(true);
+    setMessage(undefined);
+    const result = await runAtomCommand(
+      appAtomRegistry,
+      hardwareBoardEdit,
+      { environmentId, input: { threadId, projectId, path, edits } },
+      options,
+    );
+    setBusy(false);
+    if (result._tag !== "Success") {
+      setMessage(formatEnvironmentQueryError(result.cause));
+      return undefined;
+    }
+    onChanged();
+    return result.value;
+  };
+
+  const step = async (direction: SchematicHistoryStep, board = false) => {
     const { environmentId, threadId, projectId, path } = target;
     if (!path || busy) return;
     setBusy(true);
@@ -63,7 +89,7 @@ export function useSchematicEditor(target: Target, onChanged: () => void) {
     const result = await runAtomCommand(
       appAtomRegistry,
       hardwareSchematicHistory,
-      { environmentId, input: { threadId, projectId, path, step: direction } },
+      { environmentId, input: { threadId, projectId, path, step: direction, board } },
       options,
     );
     setBusy(false);
@@ -89,5 +115,5 @@ export function useSchematicEditor(target: Target, onChanged: () => void) {
     onChanged();
   };
 
-  return { busy, message, apply, step, review };
+  return { busy, message, apply, applyBoard, step, review };
 }

@@ -10,11 +10,15 @@ describe("designSteps", () => {
     expect(at({ parts: 0, footprints: 0, tracks: 0 })).toBe("requirements");
     expect(at({ parts: 5, footprints: 0, tracks: 0 })).toBe("placement");
     expect(at({ parts: 5, footprints: 3, tracks: 0 })).toBe("placement");
-    expect(at({ parts: 5, footprints: 5, tracks: 0 })).toBe("routing");
-    expect(at({ parts: 5, footprints: 5, tracks: 9, unrouted: 2 })).toBe("routing");
-    expect(at({ parts: 5, footprints: 5, tracks: 9 })).toBe("checks");
-    expect(at({ parts: 5, footprints: 5, tracks: 9, errors: 3 })).toBe("checks");
-    expect(at({ parts: 5, footprints: 5, tracks: 9, unrouted: 0, errors: 0 })).toBe("order");
+    // Parts beside the board, or a board with no outline, are not placed yet.
+    expect(at({ parts: 5, footprints: 5, tracks: 0 })).toBe("placement");
+    expect(at({ parts: 5, footprints: 5, inside: 2, tracks: 0 })).toBe("placement");
+    const placed = { parts: 5, footprints: 5, inside: 5 };
+    expect(at({ ...placed, tracks: 0 })).toBe("routing");
+    expect(at({ ...placed, tracks: 9, unrouted: 2 })).toBe("routing");
+    expect(at({ ...placed, tracks: 9 })).toBe("checks");
+    expect(at({ ...placed, tracks: 9, errors: 3 })).toBe("checks");
+    expect(at({ ...placed, tracks: 9, unrouted: 0, errors: 0 })).toBe("order");
   });
 
   it("says where each step stands", () => {
@@ -27,10 +31,9 @@ describe("designSteps", () => {
       "2 errors",
       "Files for JLC",
     ]);
-    // Placement and routing are not something the agent can do yet.
-    expect(steps.filter((step) => !step.prompt).map((step) => step.id)).toEqual([
-      "placement",
-      "routing",
-    ]);
+    // Routing is not something the agent can do yet.
+    expect(steps.filter((step) => !step.prompt).map((step) => step.id)).toEqual(["routing"]);
+    const waiting = designSteps({ parts: 5, footprints: 5, tracks: 0 }, "x");
+    expect(waiting[2]?.status).toBe("No board outline yet");
   });
 });

@@ -36,6 +36,8 @@ export function DesignCanvas(props: {
   /** Items that can be dragged to a new place, and what to do when one is dropped. */
   readonly movable?: ((item: SceneItem) => boolean) | undefined;
   readonly onMove?: ((item: SceneItem, by: Point) => void) | undefined;
+  /** The grid dragged items land on, in millimetres. */
+  readonly moveGrid?: number | undefined;
   /** When set, the canvas is in its wire tool and reports each wire drawn. */
   readonly onWire?: ((points: ReadonlyArray<Point>) => void) | undefined;
   readonly className?: string;
@@ -51,7 +53,7 @@ export function DesignCanvas(props: {
   };
   const { scene, dark, hidden, selectedIds, focus, onPick, reveal, markers, movable, onMove } =
     props;
-  const { onWire, diff } = props;
+  const { onWire, diff, moveGrid } = props;
   // The board always sits on a dark canvas, so its selection outline stays light.
   const lightSurface = scene.kind === "schematic" && !dark;
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- pushes the latest drawing and options into the imperative canvas controller
@@ -62,6 +64,7 @@ export function DesignCanvas(props: {
       movable,
       onMove,
       onWire,
+      moveGrid,
       options: {
         color: paletteFor(scene, dark),
         hidden,
@@ -93,6 +96,7 @@ export function DesignCanvas(props: {
     onMove,
     onWire,
     diff,
+    moveGrid,
   ]);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- scrolls the imperative canvas to an item chosen outside it
   useEffect(() => {

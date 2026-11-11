@@ -3411,7 +3411,12 @@ export const layerWsRpc = (
         [WS_METHODS.hardwareSchematicHistory]: (input) =>
           requireHardwareWorkspace(input).pipe(
             Effect.flatMap((workspaceRoot) =>
-              kicadService.schematicHistory({ path: input.path, step: input.step, workspaceRoot }),
+              kicadService.schematicHistory({
+                path: input.path,
+                step: input.step,
+                workspaceRoot,
+                ...(input.board ? { board: true } : {}),
+              }),
             ),
           ),
         [WS_METHODS.hardwareSchematicReview]: (input) =>
@@ -3427,7 +3432,18 @@ export const layerWsRpc = (
         [WS_METHODS.hardwareBoardSync]: (input) =>
           requireHardwareWorkspace(input).pipe(
             Effect.flatMap((workspaceRoot) =>
-              kicadService.boardSync({ path: input.path, workspaceRoot }),
+              kicadService.boardSync({ path: input.path, workspaceRoot, by: "user" }),
+            ),
+          ),
+        [WS_METHODS.hardwareBoardEdit]: (input) =>
+          requireHardwareWorkspace(input).pipe(
+            Effect.flatMap((workspaceRoot) =>
+              kicadService.boardEdit({
+                path: input.path,
+                edits: input.edits,
+                workspaceRoot,
+                by: "user",
+              }),
             ),
           ),
         [WS_METHODS.hardwareFabExport]: (input) =>

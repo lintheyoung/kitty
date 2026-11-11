@@ -252,6 +252,11 @@ export const hardwareBoardSync = createEnvironmentRpcCommand(connectionAtomRunti
   label: "environment-data:hardware:board-sync",
   tag: WS_METHODS.hardwareBoardSync,
 });
+/** Moves parts on the board and sets its outline; the same edits the agent's pcb_edit makes. */
+export const hardwareBoardEdit = createEnvironmentRpcCommand(connectionAtomRuntime, {
+  label: "environment-data:hardware:board-edit",
+  tag: WS_METHODS.hardwareBoardEdit,
+});
 export const hardwareFabExport = createEnvironmentRpcCommand(connectionAtomRuntime, {
   label: "environment-data:hardware:fab-export",
   tag: WS_METHODS.hardwareFabExport,

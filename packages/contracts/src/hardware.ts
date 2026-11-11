@@ -1,6 +1,7 @@
 import * as Schema from "effect/Schema";
 
 import { ProjectId, ThreadId } from "./baseSchemas.ts";
+import { BoardEdit } from "./kicad.ts";
 import { SchematicEdit, SchematicHistoryStep, SchematicReviewDecision } from "./schematicEdit.ts";
 
 /** Kitty hardware toolchain checks. See docs/kitty/开发计划.md. */
@@ -499,8 +500,18 @@ export const HardwareSchematicHistoryInput = Schema.Struct({
   ...HardwareWorkspaceTarget,
   path: Schema.String,
   step: SchematicHistoryStep,
+  /** Step through the board's history instead of the schematic's. */
+  board: Schema.optional(Schema.Boolean),
 });
 export type HardwareSchematicHistoryInput = typeof HardwareSchematicHistoryInput.Type;
+
+/** Change a design's board from the designer. */
+export const HardwareBoardEditInput = Schema.Struct({
+  ...HardwareWorkspaceTarget,
+  path: Schema.String,
+  edits: Schema.Array(BoardEdit),
+});
+export type HardwareBoardEditInput = typeof HardwareBoardEditInput.Type;
 
 export const HardwareSchematicReviewInput = Schema.Struct({
   ...HardwareWorkspaceTarget,

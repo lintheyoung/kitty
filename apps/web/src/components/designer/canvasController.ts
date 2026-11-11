@@ -13,6 +13,8 @@ export interface CanvasState {
   /** When set, items it accepts can be dragged; the drop reports how far, in millimetres. */
   readonly movable?: ((item: SceneItem) => boolean) | undefined;
   readonly onMove?: ((item: SceneItem, by: Point) => void) | undefined;
+  /** The grid dragged items land on, in millimetres; the schematic grid when absent. */
+  readonly moveGrid?: number | undefined;
   /** When set, clicks draw a wire; it is reported when it reaches a pin or is ended. */
   readonly onWire?: ((points: ReadonlyArray<Point>) => void) | undefined;
 }
@@ -92,7 +94,14 @@ export class CanvasController {
       if (event.button !== 0 && event.button !== 1) return;
       this.drag = { x: event.clientX, y: event.clientY, moved: false };
       canvas.setPointerCapture(event.pointerId);
-      const item = event.button === 0 && !this.state?.onWire ? this.itemAt(event) : undefined;
+      const hit = event.button === 0 && !this.state?.onWire ? this.itemAt(event) : undefined;
+      // Picking up a part by one of its pads carries the whole part.
+      const item =
+        hit?.kind === "pad"
+          ? (this.state?.scene.items.find(
+              (other) => other.kind === "footprint" && other.ref === hit.ref,
+            ) ?? hit)
+          : hit;
       this.carry =
         item && this.state?.movable?.(item)
           ? { item, x: event.clientX, y: event.clientY, by: { x: 0, y: 0 } }
@@ -109,8 +118,9 @@ export class CanvasController {
       const dy = event.clientY - drag.y;
       if (!drag.moved && Math.hypot(dx, dy) < DRAG_THRESHOLD_PX) return;
       if (this.carry) {
+        const step = this.state?.moveGrid ?? MOVE_GRID;
         const grid = (pixels: number) =>
-          Math.round(pixels / this.view.scale / MOVE_GRID) * MOVE_GRID;
+          Math.round(Math.round(pixels / this.view.scale / step) * step * 1e4) / 1e4;
         drag.moved = true;
         this.carry.by = {
           x: grid(event.clientX - this.carry.x),

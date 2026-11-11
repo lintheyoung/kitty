@@ -1,7 +1,7 @@
 import type { KicadDesignSourceResult, ProjectId, ScopedThreadRef } from "@t3tools/contracts";
 import { buildBoardScene } from "@t3tools/shared/kicad/boardScene";
 import { displayNet, sameNet } from "@t3tools/shared/kicad/pick";
-import type { Scene, SceneItem } from "@t3tools/shared/kicad/scene";
+import { type Box, type Scene, type SceneItem, unionBoxes } from "@t3tools/shared/kicad/scene";
 import { diffScenes, type SceneDiff } from "@t3tools/shared/kicad/sceneDiff";
 import { buildSchematicScene } from "@t3tools/shared/kicad/schematicScene";
 import {
@@ -14,6 +14,7 @@ import {
   PackageSearchIcon,
   PencilIcon,
   PencilLineIcon,
+  RatioIcon,
   RedoIcon,
   RefreshCwIcon,
   RotateCcwIcon,
@@ -402,6 +403,66 @@ function StepBar(props: {
   );
 }
 
+const inside = (box: Box, outline: Box) =>
+  box.minX >= outline.minX &&
+  box.minY >= outline.minY &&
+  box.maxX <= outline.maxX &&
+  box.maxY <= outline.maxY;
+
+/** Sets the board to a rectangle of a given size. */
+function BoardSize(props: {
+  readonly outline: Box | undefined;
+  readonly busy: boolean;
+  readonly onSet: (width: number, height: number) => void;
+}) {
+  const { outline } = props;
+  const size = (value: number | undefined) =>
+    value === undefined ? "" : String(Math.round(value));
+  return (
+    <form
+      className="absolute top-2 right-2 flex w-56 flex-col gap-1.5 rounded-md border bg-background/95 p-2 text-xs shadow-md"
+      onSubmit={(event) => {
+        event.preventDefault();
+        const data = new FormData(event.currentTarget);
+        const width = Number(data.get("width"));
+        const height = Number(data.get("height"));
+        if (width > 0 && height > 0) props.onSet(width, height);
+      }}
+    >
+      <div className="font-medium">Board size in mm</div>
+      <div className="flex items-center gap-1.5">
+        <Input
+          size="compact"
+          name="width"
+          type="number"
+          min={1}
+          step="any"
+          aria-label="Width"
+          placeholder="Width"
+          defaultValue={size(outline ? outline.maxX - outline.minX : undefined)}
+        />
+        <span className="text-muted-foreground">×</span>
+        <Input
+          size="compact"
+          name="height"
+          type="number"
+          min={1}
+          step="any"
+          aria-label="Height"
+          placeholder="Height"
+          defaultValue={size(outline ? outline.maxY - outline.minY : undefined)}
+        />
+        <Button type="submit" size="xs" disabled={props.busy}>
+          Set
+        </Button>
+      </div>
+      <div className="text-muted-foreground">
+        A rectangle; it replaces the outline the board has now.
+      </div>
+    </form>
+  );
+}
+
 const REVIEW_LINES = 5;
 
 /** The agent's changes, marked on the drawing, for the user to keep or take back. */
@@ -527,6 +588,7 @@ function DesignerView(props: {
   const [showProblems, setShowProblems] = useState(false);
   const [showParts, setShowParts] = useState(false);
   const [wiring, setWiring] = useState(false);
+  const [showSize, setShowSize] = useState(false);
   const [activeProblem, setActiveProblem] = useState<string | undefined>();
   const [sync, setSync] = useState<{ busy: boolean; note?: string; failed?: boolean }>({
     busy: false,
@@ -619,6 +681,15 @@ function DesignerView(props: {
       if (checked) void runChecks();
     },
   );
+  // On the board, parts are moved, turned and flipped; tracks come later.
+  const boardEditable = scene?.kind === "board" && !showModel;
+  const outline = boardEditable
+    ? unionBoxes(scene.items.filter((item) => item.layer === "Edge.Cuts").map((item) => item.box))
+    : undefined;
+  const selectedFootprint =
+    boardEditable && selection?.ref
+      ? scene.items.find((item) => item.kind === "footprint" && item.ref === selection.ref)
+      : undefined;
   const isEditablePart = (item: SceneItem) =>
     editable && item.kind === "symbol" && item.ref !== undefined && !item.ref.startsWith("#");
   const selectedPart = selectedItem && isEditablePart(selectedItem) ? selectedItem : undefined;
@@ -640,12 +711,30 @@ function DesignerView(props: {
     }
   };
   const rotateSelected = () => {
+    if (selectedFootprint?.ref) {
+      void editor.applyBoard([{ op: "move", reference: selectedFootprint.ref, rotateBy: 90 }]);
+    }
     if (!selectedPart?.ref) return;
     void editor.apply([{ op: "move", reference: selectedPart.ref, rotateBy: 90 }]);
   };
   const onKeyDown = (event: React.KeyboardEvent) => {
-    if (!editable || event.target instanceof HTMLInputElement) return;
+    if (event.target instanceof HTMLInputElement) return;
     const command = event.metaKey || event.ctrlKey;
+    if (boardEditable) {
+      if (command && event.key.toLowerCase() === "z") {
+        event.preventDefault();
+        void editor.step(event.shiftKey ? "redo" : "undo", true);
+      } else if (!command && event.key.toLowerCase() === "r") {
+        event.preventDefault();
+        rotateSelected();
+      } else if (!command && event.key.toLowerCase() === "f" && selectedFootprint?.ref) {
+        event.preventDefault();
+        const side = selectedFootprint.layer?.startsWith("B.") ? "front" : "back";
+        void editor.applyBoard([{ op: "move", reference: selectedFootprint.ref, side }]);
+      }
+      return;
+    }
+    if (!editable) return;
     if (command && event.key.toLowerCase() === "z") {
       event.preventDefault();
       void editor.step(event.shiftKey ? "redo" : "undo");
@@ -688,6 +777,16 @@ function DesignerView(props: {
     {
       parts: count("schematic", (item) => item.kind === "symbol" && !item.ref?.startsWith("#")),
       footprints: count("board", (item) => item.kind === "footprint"),
+      inside: (() => {
+        const board = drawings.find((drawing) => drawing.scene?.kind === "board")?.scene;
+        const edge = unionBoxes(
+          (board?.items ?? []).filter((item) => item.layer === "Edge.Cuts").map((item) => item.box),
+        );
+        return edge
+          ? board?.items.filter((item) => item.kind === "footprint" && inside(item.box, edge))
+              .length
+          : undefined;
+      })(),
       tracks: count("board", (item) => item.kind === "track"),
       unrouted: checks.drc?.unconnected.length,
       errors: checked
@@ -825,14 +924,14 @@ function DesignerView(props: {
                   : `${counts.errors} errors · ${counts.warnings} warnings`}
           </Button>
         ) : null}
-        {editable ? (
+        {editable || boardEditable ? (
           <>
             <Button
               size="icon-xs"
               variant="ghost-muted"
               aria-label="Undo"
               disabled={editor.busy}
-              onClick={() => void editor.step("undo")}
+              onClick={() => void editor.step("undo", boardEditable)}
             >
               <UndoIcon />
             </Button>
@@ -841,7 +940,7 @@ function DesignerView(props: {
               variant="ghost-muted"
               aria-label="Redo"
               disabled={editor.busy}
-              onClick={() => void editor.step("redo")}
+              onClick={() => void editor.step("redo", boardEditable)}
             >
               <RedoIcon />
             </Button>
@@ -881,11 +980,26 @@ function DesignerView(props: {
             {sync.busy ? "Updating…" : "Update from schematic"}
           </Button>
         ) : null}
+        {boardEditable ? (
+          <Button
+            size="xs"
+            variant={showSize ? "outline" : "ghost-muted"}
+            onClick={() => {
+              setShowSize((shown) => !shown);
+              setShowLayers(false);
+              setShowProblems(false);
+            }}
+          >
+            <RatioIcon />
+            Board size
+          </Button>
+        ) : null}
         {scene?.kind === "board" && !showModel ? (
           <Button
             size="xs"
             variant={showLayers ? "outline" : "ghost-muted"}
             onClick={() => {
+              setShowSize(false);
               setShowLayers((shown) => !shown);
               setShowProblems(false);
               setShowParts(false);
@@ -939,9 +1053,19 @@ function DesignerView(props: {
                   ? (points) => void editor.apply([{ op: "wire", points: [...points] }])
                   : undefined
               }
-              movable={editable ? isEditablePart : undefined}
+              movable={
+                editable
+                  ? isEditablePart
+                  : boardEditable
+                    ? (item) => item.kind === "footprint" && item.ref !== undefined
+                    : undefined
+              }
+              moveGrid={boardEditable ? 0.5 : undefined}
               onMove={(item, by) => {
-                if (item.ref) void editor.apply([{ op: "move", reference: item.ref, by }]);
+                if (!item.ref) return;
+                if (boardEditable) {
+                  void editor.applyBoard([{ op: "move", reference: item.ref, by }]);
+                } else void editor.apply([{ op: "move", reference: item.ref, by }]);
               }}
             />
             {scene.items.length === 0 ? (
@@ -962,6 +1086,19 @@ function DesignerView(props: {
                 onRevert={() => {
                   setSelection(undefined);
                   void editor.review("revert");
+                }}
+              />
+            ) : null}
+            {showSize && boardEditable ? (
+              <BoardSize
+                outline={outline}
+                busy={editor.busy}
+                onSet={(width, height) => {
+                  // A board with no outline yet gets one around where its parts start.
+                  const x = outline?.minX ?? 100;
+                  const y = outline?.minY ?? 80;
+                  void editor.applyBoard([{ op: "outline", x, y, width, height }]);
+                  setShowSize(false);
                 }}
               />
             ) : null}
@@ -1083,6 +1220,11 @@ function DesignerView(props: {
         {sync.note && scene?.kind === "board" ? (
           <span className={cn("truncate", sync.failed && "text-destructive-foreground")}>
             {sync.note}
+          </span>
+        ) : null}
+        {boardEditable && !sync.note ? (
+          <span className="shrink-0">
+            Drag a part to move it. R turns it, F flips it to the other side.
           </span>
         ) : null}
         {editable && wiring ? (

@@ -1,4 +1,6 @@
 import {
+  type BoardEditInput,
+  type BoardEditResult,
   type BoardSyncInput,
   type BoardSyncResult,
   HardwareToolError,
@@ -58,6 +60,7 @@ import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as SchemaIssue from "effect/SchemaIssue";
 
 import * as ProcessRunner from "../processRunner.ts";
+import { BOARD_EDIT_SCRIPT, boardEditJob, parseBoardReport } from "./boardEdit.ts";
 import {
   BOARD_SYNC_SCRIPT,
   boardSyncJob,
@@ -161,9 +164,13 @@ export class KicadService extends Context.Service<
     readonly schematicChanges: (
       input: InWorkspace<SchematicChangesInput>,
     ) => Effect.Effect<SchematicChangesResult, HardwareToolError>;
+    /** Moves parts on the board and sets its outline; with no edits, reads the board. */
+    readonly boardEdit: (
+      input: InWorkspace<BoardEditInput> & { readonly by?: SchematicChangeAuthor },
+    ) => Effect.Effect<BoardEditResult, HardwareToolError>;
     /** Brings the schematic's parts and nets onto the board. */
     readonly boardSync: (
-      input: InWorkspace<BoardSyncInput>,
+      input: InWorkspace<BoardSyncInput> & { readonly by?: SchematicChangeAuthor },
     ) => Effect.Effect<BoardSyncResult, HardwareToolError>;
     /** Keeps or reverts the agent's edits the user has not yet looked at. */
     readonly schematicReview: (
@@ -171,7 +178,12 @@ export class KicadService extends Context.Service<
     ) => Effect.Effect<SchematicReviewResult, HardwareToolError>;
     /** Steps back or forward through the edits made with `schematicEdit`. */
     readonly schematicHistory: (
-      input: InWorkspace<{ readonly path: string; readonly step: SchematicHistoryStep }>,
+      input: InWorkspace<{
+        readonly path: string;
+        readonly step: SchematicHistoryStep;
+        /** Step through the board's history instead of the schematic's. */
+        readonly board?: boolean;
+      }>,
     ) => Effect.Effect<SchematicHistoryResult, HardwareToolError>;
     /** A value that changes when the design's schematic or board files are saved. */
     readonly designStamp: (
@@ -428,10 +440,96 @@ export const make = Effect.fn("KicadService.make")(function* () {
     return { ...design, netlist };
   });
 
+  const boardUntouched = (output: string) =>
+    `KiCad could not change the board, so it was left as it was.\n${logTail(output, 8)}`;
+
+  /**
+   * Runs a script with KiCad's own Python, which writes boards exactly as KiCad
+   * saves them. Resolves to what the script printed.
+   */
+  const runKicadPython = Effect.fn("KicadService.runKicadPython")(function* (
+    source: string,
+    job: string,
+    cwd: string,
+  ) {
+    const cli = yield* findCli();
+    const env = yield* HostProcess.Environment;
+    const io = <A, E extends { readonly message: string }, R>(effect: Effect.Effect<A, E, R>) =>
+      effect.pipe(Effect.mapError((cause) => failure("command_failed", cause.message)));
+    return yield* Effect.scoped(
+      Effect.gen(function* () {
+        const temp = yield* io(fs.makeTempDirectoryScoped({ prefix: "kitty-pcb-" }));
+        const script = path.join(temp, "script.py");
+        const jobFile = path.join(temp, "job.json");
+        yield* io(fs.writeFileString(script, source));
+        yield* io(fs.writeFileString(jobFile, job));
+        for (const python of kicadPythonCandidates(env, cli)) {
+          const run = yield* processRunner
+            .run({
+              command: python,
+              args: [script, jobFile],
+              cwd,
+              timeout: "2 minutes",
+              outputMode: "truncate",
+              timeoutBehavior: "timedOutResult",
+            })
+            .pipe(Effect.option);
+          if (Option.isNone(run)) continue;
+          const output = `${run.value.stdout}\n${run.value.stderr}`;
+          // A Python without pcbnew is not KiCad's; the next candidate may be.
+          if (output.includes("No module named")) continue;
+          return output;
+        }
+        return yield* failure(
+          "toolchain_missing",
+          "KiCad's Python (the pcbnew module) was not found. Install KiCad 10 or set KITTY_KICAD_PYTHON.",
+        );
+      }),
+    );
+  });
+
+  const boardEdit = Effect.fn("KicadService.boardEdit")(function* (
+    input: InWorkspace<BoardEditInput> & { readonly by?: SchematicChangeAuthor },
+  ) {
+    const { file, relative } = yield* resolveDesign(input.workspaceRoot, input.path, ".kicad_pcb");
+    const before = yield* fs
+      .readFileString(file)
+      .pipe(Effect.mapError((cause) => failure("invalid_path", cause.message)));
+    const stdout = yield* runKicadPython(
+      BOARD_EDIT_SCRIPT,
+      boardEditJob(file, input.edits),
+      path.dirname(file),
+    );
+    const report = parseBoardReport(stdout);
+    if (!report) return yield* failure("command_failed", boardUntouched(stdout));
+    if ("error" in report) return yield* failure("invalid_argument", report.error);
+    if (report.summary.length > 0) {
+      const after = yield* fs
+        .readFileString(file)
+        .pipe(Effect.mapError((cause) => failure("command_failed", cause.message)));
+      const history = historyOf(file, before);
+      history.undo.push({ source: before, summary: report.summary });
+      if (history.undo.length > HISTORY_LIMIT) history.undo.shift();
+      history.redo.length = 0;
+      history.current = after;
+      yield* recordChange(path.dirname(file), input.by ?? "agent", report.summary);
+    }
+    return {
+      board: relative,
+      summary: [...report.summary],
+      ...(report.outline ? { outline: report.outline } : {}),
+      parts: [...report.parts],
+      overlaps: report.overlaps.map(([a, b]) => [a, b] as const),
+    } satisfies BoardEditResult;
+  });
+
   const boardSync = Effect.fn("KicadService.boardSync")(function* (
-    input: InWorkspace<BoardSyncInput>,
+    input: InWorkspace<BoardSyncInput> & { readonly by?: SchematicChangeAuthor },
   ) {
     const board = yield* resolveDesign(input.workspaceRoot, input.path, ".kicad_pcb");
+    const before = yield* fs
+      .readFileString(board.file)
+      .pipe(Effect.mapError((cause) => failure("invalid_path", cause.message)));
     const directory = path.dirname(board.file);
     const schematic = yield* resolveDesign(input.workspaceRoot, directory, ".kicad_sch").pipe(
       Effect.mapError(() =>
@@ -466,41 +564,32 @@ export const make = Effect.fn("KicadService.make")(function* () {
         path.join(path.dirname(symbols), "footprints"),
       ),
     );
-    const io = <A, E extends { readonly message: string }, R>(effect: Effect.Effect<A, E, R>) =>
-      effect.pipe(Effect.mapError((cause) => failure("command_failed", cause.message)));
-    const report = yield* Effect.scoped(
-      Effect.gen(function* () {
-        const temp = yield* io(fs.makeTempDirectoryScoped({ prefix: "kitty-pcb-" }));
-        const script = path.join(temp, "sync.py");
-        const job = path.join(temp, "job.json");
-        yield* io(fs.writeFileString(script, BOARD_SYNC_SCRIPT));
-        yield* io(fs.writeFileString(job, boardSyncJob(board.file, plan.components, libraries)));
-        // KiCad's own Python writes the board, so the file is exactly what KiCad would save.
-        let last =
-          "KiCad's Python (the pcbnew module) was not found. Install KiCad 10 or set KITTY_KICAD_PYTHON.";
-        for (const python of kicadPythonCandidates(env, cli)) {
-          const run = yield* processRunner
-            .run({
-              command: python,
-              args: [script, job],
-              cwd: directory,
-              timeout: "2 minutes",
-              outputMode: "truncate",
-              timeoutBehavior: "timedOutResult",
-            })
-            .pipe(Effect.option);
-          if (Option.isNone(run)) continue;
-          const parsed = parseSyncReport(run.value.stdout);
-          if (parsed) return parsed;
-          const output = `${run.value.stdout}\n${run.value.stderr}`;
-          // A Python without pcbnew is not KiCad's; the next candidate may be.
-          if (output.includes("No module named")) continue;
-          last = `KiCad could not update the board, so it was left as it was.\n${logTail(output, 8)}`;
-          break;
-        }
-        return yield* failure("command_failed", last);
-      }),
+    const stdout = yield* runKicadPython(
+      BOARD_SYNC_SCRIPT,
+      boardSyncJob(board.file, plan.components, libraries),
+      directory,
     );
+    const report = parseSyncReport(stdout);
+    if (!report) return yield* failure("command_failed", boardUntouched(stdout));
+    const did = [
+      ["added", report.added],
+      ["updated", report.updated],
+      ["removed", report.removed],
+    ] as const;
+    const summary = did
+      .filter(([, refs]) => refs.length > 0)
+      .map(([verb, refs]) => `Updated the board from the schematic: ${verb} ${refs.join(", ")}`);
+    if (summary.length > 0) {
+      const after = yield* fs
+        .readFileString(board.file)
+        .pipe(Effect.mapError((cause) => failure("command_failed", cause.message)));
+      const history = historyOf(board.file, before);
+      history.undo.push({ source: before, summary });
+      if (history.undo.length > HISTORY_LIMIT) history.undo.shift();
+      history.redo.length = 0;
+      history.current = after;
+      yield* recordChange(directory, input.by ?? "agent", summary);
+    }
     return {
       board: board.relative,
       ...report,
@@ -1305,9 +1394,17 @@ export const make = Effect.fn("KicadService.make")(function* () {
   };
 
   const schematicHistory = Effect.fn("KicadService.schematicHistory")(function* (
-    input: InWorkspace<{ readonly path: string; readonly step: SchematicHistoryStep }>,
+    input: InWorkspace<{
+      readonly path: string;
+      readonly step: SchematicHistoryStep;
+      readonly board?: boolean;
+    }>,
   ) {
-    const { file, relative } = yield* resolveDesign(input.workspaceRoot, input.path, ".kicad_sch");
+    const { file, relative } = yield* resolveDesign(
+      input.workspaceRoot,
+      input.path,
+      input.board ? ".kicad_pcb" : ".kicad_sch",
+    );
     const onDisk = yield* fs
       .readFileString(file)
       .pipe(Effect.mapError((cause) => failure("invalid_path", cause.message)));
@@ -1517,6 +1614,7 @@ export const make = Effect.fn("KicadService.make")(function* () {
     schematicHistory,
     schematicReview,
     boardSync,
+    boardEdit,
     upgradeLibraries,
     boardModel,
     designStamp,

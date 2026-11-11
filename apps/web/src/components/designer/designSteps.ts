@@ -6,6 +6,8 @@ export interface DesignFacts {
   readonly parts: number;
   /** Parts on the board. */
   readonly footprints: number;
+  /** Parts that sit inside the board outline; undefined when the board has no outline. */
+  readonly inside?: number | undefined;
   readonly tracks: number;
   /** Connections still to route, when a DRC run has counted them. */
   readonly unrouted?: number | undefined;
@@ -27,8 +29,8 @@ const plural = (count: number, word: string) => `${count} ${word}${count === 1 ?
 
 /** The steps in order; the first one not done is where the design stands. */
 export function designSteps(facts: DesignFacts, design: string): ReadonlyArray<DesignStep> {
-  const { parts, footprints, tracks, unrouted, errors } = facts;
-  const placed = parts > 0 && footprints >= parts;
+  const { parts, footprints, inside, tracks, unrouted, errors } = facts;
+  const placed = parts > 0 && footprints >= parts && (inside ?? 0) >= footprints;
   const routed = tracks > 0 && (unrouted ?? 0) === 0;
   return [
     {
@@ -50,7 +52,14 @@ export function designSteps(facts: DesignFacts, design: string): ReadonlyArray<D
       label: "Placement",
       done: placed,
       status:
-        parts > 0 ? `${Math.min(footprints, parts)} of ${parts} on the board` : "Nothing to place",
+        parts === 0
+          ? "Nothing to place"
+          : footprints < parts
+            ? `${footprints} of ${parts} on the board`
+            : inside === undefined
+              ? "No board outline yet"
+              : `${Math.min(inside, parts)} of ${parts} placed`,
+      prompt: `Bring the schematic of ${design} onto the board, set an outline that fits, and place the parts: blocks together, connectors at the edges, decoupling capacitors beside their chips. Explain your choices.`,
     },
     {
       id: "routing",

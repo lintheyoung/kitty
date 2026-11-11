@@ -213,6 +213,81 @@ export const BoardSyncResult = Schema.Struct({
 });
 export type BoardSyncResult = typeof BoardSyncResult.Type;
 
+const BoardPoint = Schema.Struct({ x: Schema.Number, y: Schema.Number }).annotate({
+  description: "A point on the board in millimetres; y grows downwards.",
+});
+
+/** One change to a board. */
+export const BoardEdit = Schema.Union([
+  Schema.Struct({
+    op: Schema.Literal("move"),
+    reference: Schema.String.annotate({ description: "The part to move, e.g. U1." }),
+    at: Schema.optional(BoardPoint),
+    by: Schema.optional(BoardPoint),
+    rotation: Schema.optional(
+      Schema.Number.annotate({ description: "Angle in degrees, counter-clockwise." }),
+    ),
+    rotateBy: Schema.optional(Schema.Number),
+    side: Schema.optional(Schema.Literals(["front", "back"])),
+  }),
+  Schema.Struct({
+    op: Schema.Literal("outline"),
+    x: Schema.Number,
+    y: Schema.Number,
+    width: Schema.Number,
+    height: Schema.Number,
+  }).annotate({ description: "Make the board a rectangle; replaces the outline it has." }),
+]);
+export type BoardEdit = typeof BoardEdit.Type;
+
+export const BoardEditInput = Schema.Struct({
+  path: Schema.String.annotate({
+    description: "The design: its .kicad_pcb, .kicad_pro or directory, relative to the workspace.",
+  }),
+  edits: Schema.Array(BoardEdit).annotate({
+    description: "Applied in order, all or none. Leave empty to only read the board.",
+  }),
+});
+export type BoardEditInput = typeof BoardEditInput.Type;
+
+export const BoardPart = Schema.Struct({
+  reference: Schema.String,
+  value: Schema.String,
+  /** The footprint's origin. */
+  at: BoardPoint,
+  rotation: Schema.Number,
+  side: Schema.Literals(["front", "back"]),
+  /** The space the part takes as it lies now, in millimetres. */
+  width: Schema.Number,
+  height: Schema.Number,
+  pads: Schema.Int,
+  /** The schematic block the part belongs to; empty when it has none. */
+  group: Schema.String,
+  /** Whether the whole part is inside the board outline. */
+  inside: Schema.Boolean,
+});
+export type BoardPart = typeof BoardPart.Type;
+
+export const BoardEditResult = Schema.Struct({
+  board: Schema.String,
+  /** What the edits did, one line each. */
+  summary: Schema.Array(Schema.String),
+  /** The rectangle around the board outline; absent when the board has no outline. */
+  outline: Schema.optional(
+    Schema.Struct({
+      x: Schema.Number,
+      y: Schema.Number,
+      width: Schema.Number,
+      height: Schema.Number,
+    }),
+  ),
+  /** Every part on the board after the edits. */
+  parts: Schema.Array(BoardPart),
+  /** Pairs of parts on the same side whose bodies overlap. */
+  overlaps: Schema.Array(Schema.Tuple([Schema.String, Schema.String])),
+});
+export type BoardEditResult = typeof BoardEditResult.Type;
+
 /** The text of one design file, for the client to draw. */
 export const KicadDesignFile = Schema.Struct({
   /** Sheet name, or "Board". */

@@ -43,6 +43,8 @@ import {
   SchematicEditInput,
   SchematicEditResult,
   KicadBomResult,
+  BoardEditInput,
+  BoardEditResult,
   BoardSyncInput,
   BoardSyncResult,
   KicadDrcInput,
@@ -268,6 +270,19 @@ const BoardSyncTool = Tool.make("pcb_sync", {
   .annotate(Tool.Idempotent, true)
   .annotate(Tool.OpenWorld, false);
 
+const BoardEditTool = Tool.make("pcb_edit", {
+  description:
+    "Place parts on the board and set its outline. `outline` makes the board a rectangle (x, y, width, height in mm). `move` puts a part at a point, slides it `by` an offset, turns it (`rotation`, `rotateBy`) or puts it on the `back`. Edits apply all or none. The reply lists every part with its position, size as it lies, block and whether it is inside the outline, plus the pairs of parts that overlap: fix those before routing. Call it with no edits to read the board. Keep the parts of a block together, connectors at the edges, decoupling capacitors beside their chip.",
+  parameters: BoardEditInput,
+  success: BoardEditResult,
+  failure: HardwareFailure,
+  dependencies: kicadDependencies,
+})
+  .annotate(Tool.Title, "Edit board")
+  .annotate(Tool.Destructive, false)
+  .annotate(Tool.Idempotent, false)
+  .annotate(Tool.OpenWorld, false);
+
 const KicadNetlistTool = Tool.make("kicad_netlist", {
   description:
     "Read a schematic's components and connections. Pass component (e.g. U1) to get that part's pin-to-net table: use it to learn which MCU GPIO connects to which sensor, LED or button before writing firmware.",
@@ -468,6 +483,7 @@ export const HardwareToolkit = Toolkit.make(
   KicadErcTool,
   KicadDrcTool,
   BoardSyncTool,
+  BoardEditTool,
   KicadNetlistTool,
   KicadBomTool,
   KicadFabExportTool,
