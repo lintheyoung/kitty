@@ -219,6 +219,11 @@ export const hardwareBoardModel = createEnvironmentRpcQueryAtomFamily(connection
   staleTimeMs: 60_000,
   idleTtlMs: 5 * 60_000,
 });
+/** Polled by the designer to notice saves from KiCad or the agent. */
+export const hardwareDesignStamp = createEnvironmentRpcCommand(connectionAtomRuntime, {
+  label: "environment-data:hardware:design-stamp",
+  tag: WS_METHODS.hardwareDesignStamp,
+});
 export const hardwareFabExport = createEnvironmentRpcCommand(connectionAtomRuntime, {
   label: "environment-data:hardware:fab-export",
   tag: WS_METHODS.hardwareFabExport,

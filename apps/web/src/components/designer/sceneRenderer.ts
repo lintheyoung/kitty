@@ -25,6 +25,33 @@ export interface DrawOptions {
   /** When set, items it rejects are dimmed. */
   readonly focus?: ((item: SceneItem) => boolean) | undefined;
   readonly fontFamily: string;
+  /** Problems found by a check, drawn at a fixed screen size over the drawing. */
+  readonly markers?: ReadonlyArray<Marker> | undefined;
+}
+
+export interface Marker {
+  readonly x: number;
+  readonly y: number;
+  readonly severity: "error" | "warning";
+  /** The marker the user is looking at; drawn larger. */
+  readonly active?: boolean;
+}
+
+const MARKER_COLOR = { error: "#ff4d4f", warning: "#f5a524" } as const;
+
+function drawMarkers(ctx: CanvasRenderingContext2D, markers: ReadonlyArray<Marker>, view: View) {
+  for (const marker of markers) {
+    const radius = (marker.active ? 11 : 7) / view.scale;
+    ctx.strokeStyle = MARKER_COLOR[marker.severity];
+    ctx.fillStyle = MARKER_COLOR[marker.severity];
+    ctx.lineWidth = (marker.active ? 2.5 : 1.75) / view.scale;
+    ctx.beginPath();
+    ctx.arc(marker.x, marker.y, radius, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(marker.x, marker.y, 1.75 / view.scale, 0, Math.PI * 2);
+    ctx.fill();
+  }
 }
 
 interface Entry {
@@ -217,6 +244,7 @@ export function drawScene(
     }
   }
   ctx.globalAlpha = 1;
+  if (options.markers) drawMarkers(ctx, options.markers, view);
   if (options.selection.size === 0) return;
   ctx.strokeStyle = options.selectionColor;
   ctx.lineWidth = 1.5 / view.scale;

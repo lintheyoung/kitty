@@ -18,6 +18,8 @@ export const KicadViolationItem = Schema.Struct({
   description: Schema.String,
   x: Schema.optional(Schema.Number),
   y: Schema.optional(Schema.Number),
+  /** The id of the symbol, pin, track or pad in the design file. */
+  uuid: Schema.optional(Schema.String),
 });
 export type KicadViolationItem = typeof KicadViolationItem.Type;
 
@@ -204,6 +206,10 @@ export const KicadDesignSourceResult = Schema.Struct({
   omitted: Schema.Int,
 });
 export type KicadDesignSourceResult = typeof KicadDesignSourceResult.Type;
+
+/** Changes whenever a design's schematic or board files are saved. */
+export const KicadDesignStampResult = Schema.Struct({ stamp: Schema.String });
+export type KicadDesignStampResult = typeof KicadDesignStampResult.Type;
 
 /** The board as a 3D model for the client to show. */
 export const KicadBoardModelResult = Schema.Struct({

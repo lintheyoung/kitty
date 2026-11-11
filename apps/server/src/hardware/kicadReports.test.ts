@@ -186,7 +186,9 @@ describe("parseErcReport", () => {
       severity: "error",
       description: "Pin not connected",
       sheet: "/",
-      items: [{ description: "Symbol U1 引脚 2 [EN, 输入, 图线]", x: 104.14, y: 69.85 }],
+      items: [
+        { description: "Symbol U1 引脚 2 [EN, 输入, 图线]", x: 104.14, y: 69.85, uuid: "f654b2e2" },
+      ],
     });
     expect(report.truncated).toBe(false);
   });

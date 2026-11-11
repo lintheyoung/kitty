@@ -35,10 +35,12 @@ function toViolation(raw: unknown, sheet?: string): KicadViolation {
       const pos = asRecord(entry.pos);
       const x = asNumber(pos.x);
       const y = asNumber(pos.y);
+      const uuid = asString(entry.uuid);
       return {
         description: asString(entry.description) ?? "",
         ...(x !== undefined ? { x } : {}),
         ...(y !== undefined ? { y } : {}),
+        ...(uuid ? { uuid } : {}),
       };
     }),
   };

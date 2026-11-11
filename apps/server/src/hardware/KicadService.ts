@@ -13,6 +13,7 @@ import {
   type KicadBoardModelResult,
   type KicadDesignFile,
   type KicadDesignSourceResult,
+  type KicadDesignStampResult,
   type KicadPreviewKind,
   type KicadPreviewResult,
   type HardwarePinCheckInput,
@@ -113,6 +114,10 @@ export class KicadService extends Context.Service<
     readonly boardModel: (
       input: InWorkspace<{ readonly path: string }>,
     ) => Effect.Effect<KicadBoardModelResult, HardwareToolError>;
+    /** A value that changes when the design's schematic or board files are saved. */
+    readonly designStamp: (
+      input: InWorkspace<{ readonly path: string }>,
+    ) => Effect.Effect<KicadDesignStampResult, HardwareToolError>;
     /** The design's files as text, for the client to draw. */
     readonly designSource: (
       input: InWorkspace<{ readonly path: string }>,
@@ -1019,8 +1024,28 @@ export const make = Effect.fn("KicadService.make")(function* () {
     );
   });
 
+  const designStamp = Effect.fn("KicadService.designStamp")(function* (
+    input: InWorkspace<{ readonly path: string }>,
+  ) {
+    const target = yield* confine(input.workspaceRoot, input.path);
+    const info = yield* fs.stat(target).pipe(Effect.option);
+    const directory =
+      Option.isSome(info) && info.value.type === "Directory" ? target : path.dirname(target);
+    // Sub-sheets live beside the root sheet, so every design file in the folder counts.
+    const parts: Array<string> = [];
+    for (const entry of (yield* listFiles(directory)).toSorted()) {
+      if (!entry.endsWith(".kicad_sch") && !entry.endsWith(".kicad_pcb")) continue;
+      const stat = yield* fs.stat(path.join(directory, entry)).pipe(Effect.option);
+      if (Option.isNone(stat)) continue;
+      const modified = Option.getOrUndefined(stat.value.mtime)?.getTime() ?? 0;
+      parts.push(`${entry}:${stat.value.size}:${modified}`);
+    }
+    return { stamp: parts.join("|") } satisfies KicadDesignStampResult;
+  });
+
   return KicadService.of({
     boardModel,
+    designStamp,
     designSource,
     preview,
     listDesigns,

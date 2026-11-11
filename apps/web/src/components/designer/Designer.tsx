@@ -3,7 +3,13 @@ import { buildBoardScene } from "@t3tools/shared/kicad/boardScene";
 import { displayNet, sameNet } from "@t3tools/shared/kicad/pick";
 import type { Scene, SceneItem } from "@t3tools/shared/kicad/scene";
 import { buildSchematicScene } from "@t3tools/shared/kicad/schematicScene";
-import { ArrowLeftRightIcon, LayersIcon, RefreshCwIcon, XIcon } from "lucide-react";
+import {
+  ArrowLeftRightIcon,
+  LayersIcon,
+  RefreshCwIcon,
+  ShieldCheckIcon,
+  XIcon,
+} from "lucide-react";
 import { useState } from "react";
 
 import { useTheme } from "~/hooks/useTheme";
@@ -14,8 +20,11 @@ import { useEnvironmentQuery } from "../../state/query";
 import { Button } from "../ui/button";
 import { BoardModelView } from "./BoardModelView";
 import { DesignCanvas } from "./DesignCanvas";
+import { ProblemList } from "./ProblemList";
+import { boardProblems, countProblems, sheetProblems } from "./problems.ts";
 import { layerLabel, paletteFor, shownByDefault } from "./scenePaint.ts";
-import { scenePaints } from "./sceneRenderer.ts";
+import { type Marker, scenePaints } from "./sceneRenderer.ts";
+import { useDesignChecks, useDesignWatcher } from "./useDesignChecks.ts";
 
 const MODEL_TAB = "model";
 
@@ -228,6 +237,8 @@ function DesignerView(props: {
   const [reveal, setReveal] = useState<SceneItem | undefined>();
   const [toggled, setToggled] = useState<ReadonlySet<string>>(new Set());
   const [showLayers, setShowLayers] = useState(false);
+  const [showProblems, setShowProblems] = useState(false);
+  const [activeProblem, setActiveProblem] = useState<string | undefined>();
 
   const loaded = useEnvironmentQuery(
     project ? hardwareDesignSource({ environmentId, input: { ...target, path: project } }) : null,
@@ -274,6 +285,38 @@ function DesignerView(props: {
     }
     return undefined;
   })();
+
+  const { checks, run: runChecks } = useDesignChecks(
+    { environmentId, threadId, projectId: props.projectId, path: project },
+    (source?.sheets.length ?? 0) > 0,
+    source?.board !== undefined,
+  );
+  const checked = checks.erc !== undefined || checks.drc !== undefined;
+  // A save from KiCad or the agent redraws the design, and re-checks it if checks are on.
+  useDesignWatcher({ environmentId, threadId, projectId: props.projectId, path: project }, () => {
+    loaded.refresh();
+    if (checked) void runChecks();
+  });
+  const problems = !current
+    ? []
+    : scene?.kind === "board"
+      ? boardProblems(checks.drc)
+      : sheetProblems(checks.erc, current.name, current === drawings[0]);
+  const markers = showProblems
+    ? problems.flatMap((problem): ReadonlyArray<Marker> =>
+        problem.x === undefined || problem.y === undefined
+          ? []
+          : [
+              {
+                x: problem.x,
+                y: problem.y,
+                severity: problem.severity,
+                active: problem.key === activeProblem,
+              },
+            ],
+      )
+    : undefined;
+  const counts = countProblems(problems);
 
   const pick = (item: SceneItem | undefined) => {
     setReveal(undefined);
@@ -342,11 +385,36 @@ function DesignerView(props: {
             ))}
           </select>
         ) : null}
+        {scene && !showModel ? (
+          <Button
+            size="xs"
+            variant={showProblems ? "outline" : "ghost-muted"}
+            disabled={checks.running}
+            onClick={() => {
+              // The first click runs the checks; later clicks show or hide the results.
+              if (!checked) void runChecks();
+              setShowProblems(!showProblems || !checked);
+              setShowLayers(false);
+            }}
+          >
+            <ShieldCheckIcon className={cn(checks.running && "animate-pulse")} />
+            {checks.running
+              ? "Checking…"
+              : !checked
+                ? "Check"
+                : counts.errors + counts.warnings === 0
+                  ? "No problems"
+                  : `${counts.errors} errors · ${counts.warnings} warnings`}
+          </Button>
+        ) : null}
         {scene?.kind === "board" && !showModel ? (
           <Button
             size="xs"
             variant={showLayers ? "outline" : "ghost-muted"}
-            onClick={() => setShowLayers((shown) => !shown)}
+            onClick={() => {
+              setShowLayers((shown) => !shown);
+              setShowProblems(false);
+            }}
           >
             <LayersIcon />
             Layers
@@ -380,6 +448,7 @@ function DesignerView(props: {
               selectedIds={selectedIds}
               focus={focus}
               reveal={reveal}
+              markers={markers}
               onPick={pick}
             />
             {scene.items.length === 0 ? (
@@ -400,6 +469,31 @@ function DesignerView(props: {
                     return next;
                   })
                 }
+              />
+            ) : null}
+            {showProblems && checked ? (
+              <ProblemList
+                problems={problems}
+                activeKey={activeProblem}
+                truncated={
+                  (scene.kind === "board" ? checks.drc?.truncated : checks.erc?.truncated) ?? false
+                }
+                onPick={(problem) => {
+                  setActiveProblem(problem.key);
+                  if (problem.x === undefined || problem.y === undefined) return;
+                  // A small box around the spot is enough for the canvas to centre on it.
+                  setReveal({
+                    id: problem.key,
+                    kind: "graphic",
+                    shapes: [],
+                    box: {
+                      minX: problem.x - 4,
+                      minY: problem.y - 4,
+                      maxX: problem.x + 4,
+                      maxY: problem.y + 4,
+                    },
+                  });
+                }}
               />
             ) : null}
             {selectedItem ? (
@@ -433,6 +527,9 @@ function DesignerView(props: {
             {scene.items.filter(isPart).length} parts
             {selection?.net ? ` · net ${displayNet(selection.net)}` : ""}
           </span>
+        ) : null}
+        {checks.error ? (
+          <span className="truncate text-destructive-foreground">{checks.error}</span>
         ) : null}
         {source && source.omitted > 0 ? (
           <span className="shrink-0">{source.omitted} file(s) too large to show</span>

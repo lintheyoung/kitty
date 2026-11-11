@@ -345,6 +345,7 @@ import {
   KicadPreviewResult,
   KicadBoardModelResult,
   KicadDesignSourceResult,
+  KicadDesignStampResult,
   HardwarePinmapSyncResult,
 } from "./kicad.ts";
 import {
@@ -547,6 +548,7 @@ export const WS_METHODS = {
   hardwarePreview: "hardware.preview",
   hardwareDesignSource: "hardware.designSource",
   hardwareBoardModel: "hardware.boardModel",
+  hardwareDesignStamp: "hardware.designStamp",
   hardwareTestPlans: "hardware.testPlans",
   hardwareTestCreate: "hardware.testCreate",
   hardwareTestRun: "hardware.testRun",
@@ -1868,6 +1870,12 @@ const WsHardwareBoardModelRpc = Rpc.make(WS_METHODS.hardwareBoardModel, {
   error: Schema.Union([HardwareToolError, EnvironmentAuthorizationError]),
 });
 
+const WsHardwareDesignStampRpc = Rpc.make(WS_METHODS.hardwareDesignStamp, {
+  payload: HardwareDesignInput,
+  success: KicadDesignStampResult,
+  error: Schema.Union([HardwareToolError, EnvironmentAuthorizationError]),
+});
+
 const WsHardwareFabExportRpc = Rpc.make(WS_METHODS.hardwareFabExport, {
   payload: HardwareDesignInput,
   success: KicadFabExportResult,
@@ -2399,6 +2407,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsHardwarePreviewRpc,
   WsHardwareDesignSourceRpc,
   WsHardwareBoardModelRpc,
+  WsHardwareDesignStampRpc,
   WsHardwareTestPlansRpc,
   WsHardwareTestCreateRpc,
   WsHardwareTestRunRpc,

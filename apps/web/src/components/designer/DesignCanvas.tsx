@@ -6,6 +6,7 @@ import { cn } from "~/lib/utils";
 
 import { Button } from "../ui/button";
 import { CanvasController } from "./canvasController.ts";
+import type { Marker } from "./sceneRenderer.ts";
 import { paletteFor, SELECTION_COLOR, SELECTION_COLOR_LIGHT } from "./scenePaint.ts";
 
 const FONT_FAMILY = 'ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif';
@@ -21,6 +22,7 @@ export function DesignCanvas(props: {
   readonly focus?: ((item: SceneItem) => boolean) | undefined;
   /** An item to bring into view, e.g. after cross-probing from the other drawing. */
   readonly reveal?: SceneItem | undefined;
+  readonly markers?: ReadonlyArray<Marker> | undefined;
   readonly onPick: (item: SceneItem | undefined) => void;
   readonly className?: string;
 }) {
@@ -33,7 +35,7 @@ export function DesignCanvas(props: {
       controller.current = null;
     };
   };
-  const { scene, dark, hidden, selectedIds, focus, onPick, reveal } = props;
+  const { scene, dark, hidden, selectedIds, focus, onPick, reveal, markers } = props;
   // The board always sits on a dark canvas, so its selection outline stays light.
   const lightSurface = scene.kind === "schematic" && !dark;
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- pushes the latest drawing and options into the imperative canvas controller
@@ -48,9 +50,10 @@ export function DesignCanvas(props: {
         selectionColor: lightSurface ? SELECTION_COLOR_LIGHT : SELECTION_COLOR,
         focus,
         fontFamily: FONT_FAMILY,
+        markers,
       },
     });
-  }, [scene, dark, hidden, selectedIds, focus, onPick, lightSurface]);
+  }, [scene, dark, hidden, selectedIds, focus, onPick, lightSurface, markers]);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- scrolls the imperative canvas to an item chosen outside it
   useEffect(() => {
     if (reveal) controller.current?.reveal(reveal);
