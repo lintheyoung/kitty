@@ -17,6 +17,8 @@ interface PreviewPanelShellProps {
   workspaceLabel?: string;
   mode: PreviewPanelMode;
   maximized?: boolean;
+  /** Takes the row's free width and leaves the fixed width to its sibling. */
+  fill?: boolean;
   inlineSize?: PreviewPanelInlineSize;
   open?: boolean;
   /** Use a distinct key per surface to keep remembered widths independent. */
@@ -49,7 +51,8 @@ function PreviewPanelShellFrame(
   const isInline = props.mode === "inline";
   const collapsible = isInline && props.open !== undefined;
   const open = props.open ?? true;
-  const maximized = props.maximized ?? false;
+  // A filling panel sizes like a maximized one, but its sibling stays visible.
+  const maximized = (props.maximized ?? false) || (props.fill ?? false);
   const hostRef = useRef<HTMLDivElement | null>(null);
   const returnedFocus = useRef(false);
   const { width, handlers, observeRow } = props.inlineSize;

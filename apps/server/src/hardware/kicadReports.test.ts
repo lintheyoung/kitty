@@ -10,7 +10,7 @@ import {
   schematicPages,
   unescapeKicad,
 } from "./kicadReports.ts";
-import { parseSexpr } from "./sexpr.ts";
+import { parseSexpr } from "@t3tools/shared/kicad/sexpr";
 
 // Trimmed from real KiCad 10.0.7 reports (UI language: Chinese).
 const ERC = JSON.stringify({

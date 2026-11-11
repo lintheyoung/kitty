@@ -1075,6 +1075,13 @@ export default function ChatView(props: ChatViewProps) {
   const rightPanelControlsAtRoot = rightPanelPresent && !shouldUsePlanSidebarSheet;
   const renderedRightPanelSurface = rightPanelPresence.value?.activeSurface ?? null;
   const renderedRightPanelSurfaces = rightPanelPresence.value?.surfaces ?? [];
+  // Design mode: the board designer fills the left of the row, the chat sits on the right.
+  const designMode =
+    !embedded &&
+    rightPanelOpen &&
+    !shouldUsePlanSidebarSheet &&
+    rightPanelState.maximized !== true &&
+    renderedRightPanelSurface?.kind === "designer";
   const previewMiniPlayerVisible = shouldRenderPreviewMiniPlayer(
     activePreviewMiniPlayer?.source ?? null,
     renderedRightPanelSurface,
@@ -2339,6 +2346,7 @@ export default function ChatView(props: ChatViewProps) {
     activateRightPanelSurfaceStable,
     addDeviceSurfaceStable,
     addHardwareSurfaceStable,
+    addDesignerSurfaceStable,
     addDiffSurfaceStable,
     addFilesSurfaceStable,
     addPullRequestSurfaceStable,
@@ -3280,7 +3288,10 @@ export default function ChatView(props: ChatViewProps) {
   const content = (
     <div
       ref={setWorkspaceLayoutElement}
-      className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden bg-background"
+      className={cn(
+        "relative flex min-h-0 min-w-0 flex-1 overflow-hidden bg-background",
+        designMode && "flex-row-reverse",
+      )}
     >
       {embedded ? null : (
         <DeviceSetupDialogHost
@@ -3293,7 +3304,11 @@ export default function ChatView(props: ChatViewProps) {
       <div
         className={cn(
           "flex min-h-0 min-w-0 flex-col overflow-x-hidden",
-          rightPanelMaximized ? "w-0 flex-none" : "flex-1",
+          rightPanelMaximized
+            ? "w-0 flex-none"
+            : designMode
+              ? "w-[26rem] max-w-[45%] flex-none border-l border-border"
+              : "flex-1",
         )}
         data-chat-column-maximized-away={rightPanelMaximized ? "true" : "false"}
         data-chat-column
@@ -3314,6 +3329,8 @@ export default function ChatView(props: ChatViewProps) {
                   )
                 : "flex h-[var(--workspace-topbar-height)] min-h-[var(--workspace-topbar-height)] shrink-0 items-center pl-(--workspace-gutter-start) pr-(--workspace-gutter-end)",
               COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS,
+              // The window's panel controls sit over this header when the chat is on the right.
+              designMode && "pr-28",
             )}
           >
             {isElectron && rightPanelControlsAtRoot ? (
@@ -3340,7 +3357,10 @@ export default function ChatView(props: ChatViewProps) {
                 : {})}
               {...(threadFindEnabled ? { onFindInThread: openThreadFindStable } : {})}
               {...(activeProject && !activeProject.isScratch
-                ? { onOpenHardware: addHardwareSurfaceStable }
+                ? {
+                    onOpenHardware: addHardwareSurfaceStable,
+                    onOpenDesigner: addDesignerSurfaceStable,
+                  }
                 : {})}
             />
           </header>
@@ -3952,6 +3972,7 @@ export default function ChatView(props: ChatViewProps) {
           keybindings={keybindings}
           getShortcutContext={getShortcutContextStable}
           maximized={rightPanelMaximized}
+          leading={designMode}
           layoutControls={
             rightPanelOpen ? (
               <div className="mr-px flex items-center gap-1">

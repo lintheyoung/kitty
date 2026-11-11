@@ -241,3 +241,31 @@ it.effect("draws schematic sheets root first, and a board unless it is blank", (
     assert.equal(blank.pages.length, 0);
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
+
+it.effect("returns the design's sheets and board as text, following sub-sheets", () =>
+  Effect.gen(function* () {
+    const root = yield* workspace();
+    const fs = yield* FileSystem.FileSystem;
+    const sheet = (file: string) =>
+      `(kicad_sch (sheet (at 0 0) (size 10 10) (property "Sheetname" "Power") (property "Sheetfile" "${file}")))`;
+    yield* fs.writeFileString(`${root}/hw/keycap/keycap.kicad_sch`, sheet("power.kicad_sch"));
+    // A sheet that points outside the workspace is not followed.
+    yield* fs.writeFileString(
+      `${root}/hw/keycap/power.kicad_sch`,
+      sheet("../../../outside.kicad_sch"),
+    );
+    yield* fs.writeFileString(`${root}/hw/keycap/keycap.kicad_pcb`, "(kicad_pcb)");
+    const design = yield* withCli(drawingCli([], ""), (service) =>
+      service.designSource({ workspaceRoot: root, path: "hw/keycap/keycap.kicad_pro" }),
+    );
+    assert.deepStrictEqual(
+      design.sheets.map((entry) => [entry.name, entry.file]),
+      [
+        ["Root sheet", "hw/keycap/keycap.kicad_sch"],
+        ["Power", "hw/keycap/power.kicad_sch"],
+      ],
+    );
+    assert.equal(design.board?.source, "(kicad_pcb)");
+    assert.equal(design.omitted, 0);
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);

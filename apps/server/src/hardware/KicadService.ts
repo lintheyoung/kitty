@@ -10,6 +10,8 @@ import {
   type KicadFabExportResult,
   type KicadNetlistInput,
   type KicadNetlistResult,
+  type KicadDesignFile,
+  type KicadDesignSourceResult,
   type KicadPreviewKind,
   type KicadPreviewResult,
   type HardwarePinCheckInput,
@@ -26,6 +28,7 @@ import {
   KittyPinmap,
 } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import { schematicSubSheets, type SubSheet } from "@t3tools/shared/kicad/schematicScene";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -105,6 +108,10 @@ export class KicadService extends Context.Service<
       title: string,
     ) => Effect.Effect<ReadonlyArray<string>, HardwareToolError>;
     /** SVG drawings of the schematic sheets or the board, for the panel. */
+    /** The design's files as text, for the client to draw. */
+    readonly designSource: (
+      input: InWorkspace<{ readonly path: string }>,
+    ) => Effect.Effect<KicadDesignSourceResult, HardwareToolError>;
     readonly preview: (
       input: InWorkspace<{ readonly path: string; readonly kind: KicadPreviewKind }>,
     ) => Effect.Effect<KicadPreviewResult, HardwareToolError>;
@@ -903,7 +910,68 @@ export const make = Effect.fn("KicadService.make")(function* () {
     );
   });
 
+  const designSource = Effect.fn("KicadService.designSource")(function* (
+    input: InWorkspace<{ readonly path: string }>,
+  ) {
+    const root = input.workspaceRoot;
+    const schematic = yield* resolveDesign(root, input.path, ".kicad_sch").pipe(Effect.option);
+    const board = yield* resolveDesign(root, input.path, ".kicad_pcb").pipe(Effect.option);
+    if (Option.isNone(schematic) && Option.isNone(board)) {
+      return yield* failure("invalid_path", `No KiCad schematic or board for ${input.path}.`);
+    }
+    let budget = MAX_PREVIEW_BYTES;
+    let omitted = 0;
+    const load = Effect.fn("KicadService.designSource.load")(function* (
+      file: string,
+      name: string,
+    ) {
+      const source = yield* fs.readFileString(file).pipe(Effect.option);
+      if (Option.isNone(source)) return undefined;
+      if (source.value.length > budget) {
+        omitted++;
+        return undefined;
+      }
+      budget -= source.value.length;
+      const loaded: KicadDesignFile = {
+        name,
+        file: path.relative(root, file),
+        source: source.value,
+      };
+      return loaded;
+    });
+    const sheets: Array<KicadDesignFile> = [];
+    if (Option.isSome(schematic)) {
+      // Sub-sheet files are relative to the sheet that refers to them.
+      const queue = [{ file: schematic.value.file, name: "Root sheet" }];
+      const seen = new Set<string>();
+      for (const next of queue) {
+        if (seen.has(next.file)) continue;
+        seen.add(next.file);
+        const loaded = yield* load(next.file, next.name);
+        if (!loaded) continue;
+        sheets.push(loaded);
+        // A sheet that does not parse is still returned; it just has no sub-sheets to follow.
+        const subs = yield* Effect.try({
+          try: () => schematicSubSheets(loaded.source),
+          catch: () => "unreadable" as const,
+        }).pipe(Effect.orElseSucceed((): ReadonlyArray<SubSheet> => []));
+        for (const sub of subs) {
+          const file = path.resolve(path.dirname(next.file), sub.file);
+          const inside = yield* confine(root, path.relative(root, file)).pipe(Effect.option);
+          if (Option.isSome(inside)) queue.push({ file, name: sub.name || sub.file });
+        }
+      }
+    }
+    const boardFile = Option.isSome(board) ? yield* load(board.value.file, "Board") : undefined;
+    return {
+      sheets,
+      ...(boardFile ? { board: boardFile } : {}),
+      omitted,
+    } satisfies KicadDesignSourceResult;
+  });
+
   return KicadService.of({
+    designSource,
     preview,
     listDesigns,
     openInKicad,

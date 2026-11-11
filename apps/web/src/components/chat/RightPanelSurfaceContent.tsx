@@ -24,6 +24,7 @@ import { PullRequestDetailPanel } from "../pullRequest/PullRequestDetailPanel";
 import { PullRequestDetailGhost } from "../pullRequest/PullRequestGhosts";
 import { PullRequestsUnavailableState } from "../pullRequest/PullRequestsUnavailableState";
 import { ThreadPullRequestsPanel } from "../pullRequest/ThreadPullRequestsPanel";
+import { Designer } from "../designer/Designer";
 import { HardwarePanel } from "../hardware/HardwarePanel";
 
 const PreviewPanel = lazy(() =>
@@ -180,6 +181,8 @@ export function RightPanelSurfaceContent(props: {
           onClose={() => onCloseSurface(surface)}
         />
       );
+    case "designer":
+      return <Designer threadRef={threadRef} projectId={props.pullRequest.projectId} />;
     case "hardware":
       // The active thread's project, drafts included.
       return <HardwarePanel threadRef={threadRef} projectId={props.pullRequest.projectId} />;

@@ -1,0 +1,420 @@
+import type { KicadDesignSourceResult, ProjectId, ScopedThreadRef } from "@t3tools/contracts";
+import { buildBoardScene } from "@t3tools/shared/kicad/boardScene";
+import { displayNet, sameNet } from "@t3tools/shared/kicad/pick";
+import type { Scene, SceneItem } from "@t3tools/shared/kicad/scene";
+import { buildSchematicScene } from "@t3tools/shared/kicad/schematicScene";
+import { ArrowLeftRightIcon, LayersIcon, RefreshCwIcon, XIcon } from "lucide-react";
+import { useState } from "react";
+
+import { useTheme } from "~/hooks/useTheme";
+import { cn } from "~/lib/utils";
+
+import { hardwareDesigns, hardwareDesignSource } from "../../state/hardware";
+import { useEnvironmentQuery } from "../../state/query";
+import { Button } from "../ui/button";
+import { DesignCanvas } from "./DesignCanvas";
+import { layerLabel, paletteFor, shownByDefault } from "./scenePaint.ts";
+import { scenePaints } from "./sceneRenderer.ts";
+
+interface Drawing {
+  readonly key: string;
+  readonly name: string;
+  readonly file: string;
+  readonly scene?: Scene;
+  readonly error?: string;
+}
+
+/** What is selected, kept in terms that carry across the schematic and the board. */
+interface Selection {
+  readonly id: string;
+  readonly from: Scene["kind"];
+  readonly ref?: string;
+  readonly net?: string;
+}
+
+function parseDrawings(source: KicadDesignSourceResult): ReadonlyArray<Drawing> {
+  const read = (key: string, name: string, file: string, build: () => Scene): Drawing => {
+    try {
+      return { key, name, file, scene: build() };
+    } catch (cause) {
+      return { key, name, file, error: cause instanceof Error ? cause.message : String(cause) };
+    }
+  };
+  return [
+    ...source.sheets.map((sheet, index) =>
+      read(
+        `sheet:${sheet.file}`,
+        index === 0 ? "Schematic" : sheet.name,
+        sheet.file,
+        () => buildSchematicScene(sheet.source).scene,
+      ),
+    ),
+    ...(source.board
+      ? [read("board", "PCB", source.board.file, () => buildBoardScene(source.board?.source ?? ""))]
+      : []),
+  ];
+}
+
+const isPart = (item: SceneItem) => item.kind === "symbol" || item.kind === "footprint";
+
+function onNet(item: SceneItem, scene: Scene, selection: Selection): boolean {
+  const net = selection.net;
+  if (!net) return true;
+  const same = (other: string | undefined) =>
+    other !== undefined &&
+    (scene.kind === selection.from
+      ? other === net
+      : selection.from === "schematic"
+        ? sameNet(net, other)
+        : sameNet(other, net));
+  return same(item.net) || (item.pins?.some((pin) => same(pin.net)) ?? false);
+}
+
+function selectedIn(scene: Scene, selection: Selection | undefined): ReadonlySet<string> {
+  const ids = new Set<string>();
+  if (!selection) return ids;
+  for (const item of scene.items) {
+    if (item.id === selection.id) ids.add(item.id);
+    // A part is the same part in both drawings; a pad selects its symbol too.
+    else if (selection.ref && isPart(item) && item.ref === selection.ref) ids.add(item.id);
+  }
+  return ids;
+}
+
+const KIND_LABEL: Readonly<Record<SceneItem["kind"], string>> = {
+  symbol: "Part",
+  footprint: "Part",
+  pad: "Pad",
+  wire: "Wire",
+  junction: "Junction",
+  label: "Label",
+  "no-connect": "No connection",
+  sheet: "Sheet",
+  graphic: "Drawing",
+  track: "Track",
+  via: "Via",
+  zone: "Copper zone",
+};
+
+function Properties(props: {
+  readonly item: SceneItem;
+  readonly otherName: string | undefined;
+  readonly onShowOther: () => void;
+  readonly onPickNet: (net: string) => void;
+  readonly onClose: () => void;
+}) {
+  const { item } = props;
+  const rows: Array<readonly [string, string]> = [
+    ...(item.value && item.value !== item.title ? [["Value", item.value] as const] : []),
+    ...(item.net ? [["Net", displayNet(item.net)] as const] : []),
+    ...(item.layer && item.kind !== "footprint"
+      ? [["Layer", layerLabel(item.layer)] as const]
+      : []),
+    ...(item.facts ?? []).filter(([, value]) => value !== ""),
+  ];
+  return (
+    <div className="absolute bottom-2 left-2 flex max-h-[60%] w-64 flex-col rounded-md border bg-background/95 text-xs shadow-md">
+      <div className="flex items-center gap-2 border-b px-2 py-1.5">
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-sm font-medium">{item.title || KIND_LABEL[item.kind]}</div>
+          <div className="text-muted-foreground">{KIND_LABEL[item.kind]}</div>
+        </div>
+        {props.otherName ? (
+          <Button size="xs" variant="outline" onClick={props.onShowOther}>
+            <ArrowLeftRightIcon />
+            {props.otherName}
+          </Button>
+        ) : null}
+        <Button size="icon-xs" variant="ghost" aria-label="Clear selection" onClick={props.onClose}>
+          <XIcon />
+        </Button>
+      </div>
+      <div className="min-h-0 overflow-y-auto px-2 py-1.5">
+        {rows.map(([name, value]) => (
+          <div key={name} className="flex gap-2 py-0.5">
+            <span className="w-20 shrink-0 text-muted-foreground">{name}</span>
+            <span className="min-w-0 break-words">{value}</span>
+          </div>
+        ))}
+        {item.pins && item.pins.length > 0 && !item.ref?.startsWith("#") ? (
+          <div className="mt-1 border-t pt-1">
+            <div className="mb-0.5 text-muted-foreground">Pins</div>
+            {item.pins.map((pin) => (
+              <button
+                key={`${pin.number}:${pin.name}`}
+                type="button"
+                disabled={!pin.net}
+                className="flex w-full gap-2 rounded px-1 py-0.5 text-left enabled:hover:bg-accent"
+                onClick={() => pin.net && props.onPickNet(pin.net)}
+              >
+                <span className="w-8 shrink-0 font-mono">{pin.number}</span>
+                <span className="w-16 shrink-0 truncate text-muted-foreground">
+                  {pin.name === "~" ? "" : pin.name}
+                </span>
+                <span className="min-w-0 truncate">{pin.net ? displayNet(pin.net) : "none"}</span>
+              </button>
+            ))}
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function LayerList(props: {
+  readonly scene: Scene;
+  readonly hidden: ReadonlySet<string>;
+  readonly onToggle: (paint: string) => void;
+}) {
+  const color = paletteFor(props.scene, true);
+  // Top of the stack first, the way the layer list reads in KiCad.
+  const paints = scenePaints(props.scene).toReversed();
+  return (
+    <div className="absolute top-2 right-2 max-h-[70%] w-48 overflow-y-auto rounded-md border bg-background/95 p-1 text-xs shadow-md">
+      {paints.map((paint) => (
+        <label
+          key={paint}
+          className="flex cursor-pointer items-center gap-2 rounded px-1.5 py-1 hover:bg-accent"
+        >
+          <input
+            type="checkbox"
+            className="size-3"
+            checked={!props.hidden.has(paint)}
+            onChange={() => props.onToggle(paint)}
+          />
+          <span
+            className="size-2.5 shrink-0 rounded-sm"
+            style={{ backgroundColor: color(paint) }}
+          />
+          <span className="truncate">{layerLabel(paint)}</span>
+        </label>
+      ))}
+    </div>
+  );
+}
+
+/** The board designer: schematic sheets and the board as live, clickable drawings. */
+export function Designer(props: {
+  readonly threadRef: ScopedThreadRef;
+  /** Null outside a project, where there is no design to open. */
+  readonly projectId: ProjectId | null;
+}) {
+  if (props.projectId === null) {
+    return (
+      <div className="flex h-full items-center justify-center p-6 text-center text-sm text-muted-foreground">
+        Open a hardware project to design its board.
+      </div>
+    );
+  }
+  return <DesignerView threadRef={props.threadRef} projectId={props.projectId} />;
+}
+
+function DesignerView(props: {
+  readonly threadRef: ScopedThreadRef;
+  readonly projectId: ProjectId;
+}) {
+  const { environmentId, threadId } = props.threadRef;
+  const { resolvedTheme } = useTheme();
+  const target = { threadId, projectId: props.projectId };
+  const designs = useEnvironmentQuery(hardwareDesigns({ environmentId, input: target }));
+  const list = designs.data?.designs ?? [];
+  const [chosen, setChosen] = useState<string | null>(null);
+  const project = list.find((design) => design.project === chosen)?.project ?? list[0]?.project;
+  const [tab, setTab] = useState<string | null>(null);
+  const [selection, setSelection] = useState<Selection | undefined>();
+  const [reveal, setReveal] = useState<SceneItem | undefined>();
+  const [toggled, setToggled] = useState<ReadonlySet<string>>(new Set());
+  const [showLayers, setShowLayers] = useState(false);
+
+  const loaded = useEnvironmentQuery(
+    project ? hardwareDesignSource({ environmentId, input: { ...target, path: project } }) : null,
+  );
+  const source = loaded.data ?? undefined;
+  const drawings = source ? parseDrawings(source) : [];
+  const current = drawings.find((drawing) => drawing.key === tab) ?? drawings[0];
+  const scene = current?.scene;
+  const hidden = (() => {
+    const result = new Set<string>();
+    if (!scene) return result;
+    for (const paint of scenePaints(scene)) {
+      // A toggle flips a layer away from its default visibility.
+      if (shownByDefault(scene, paint) === toggled.has(`${scene.kind}:${paint}`)) result.add(paint);
+    }
+    return result;
+  })();
+  const selectedIds = scene ? selectedIn(scene, selection) : new Set<string>();
+  const focus =
+    scene && selection?.net ? (item: SceneItem) => onNet(item, scene, selection) : undefined;
+  const selectedItem =
+    scene?.items.find((item) => selectedIds.has(item.id) && item.id === selection?.id) ??
+    scene?.items.find((item) => selectedIds.has(item.id));
+
+  // The same part or net in a drawing of the other kind, for "show in PCB / schematic".
+  const other = (() => {
+    if (!scene || !selection) return undefined;
+    for (const drawing of drawings) {
+      if (!drawing.scene || drawing.scene.kind === scene.kind) continue;
+      const candidate = drawing.scene;
+      const match =
+        candidate.items.find(
+          (item) => selection.ref !== undefined && isPart(item) && item.ref === selection.ref,
+        ) ??
+        (selection.net
+          ? candidate.items.find(
+              (item) =>
+                item.kind !== "zone" && item.net !== undefined && onNet(item, candidate, selection),
+            )
+          : undefined);
+      if (match) return { drawing, item: match };
+    }
+    return undefined;
+  })();
+
+  const pick = (item: SceneItem | undefined) => {
+    setReveal(undefined);
+    if (!item || !scene) return setSelection(undefined);
+    setSelection({
+      id: item.id,
+      from: scene.kind,
+      ...(item.ref && !item.ref.startsWith("#") ? { ref: item.ref } : {}),
+      ...(item.net ? { net: item.net } : {}),
+    });
+  };
+
+  if (list.length === 0) {
+    return (
+      <div className="flex h-full items-center justify-center p-6 text-center text-sm text-muted-foreground">
+        {designs.isPending
+          ? "Looking for KiCad designs…"
+          : "No KiCad design in this project yet. Create one from the Hardware panel, or ask Kitty to start a board."}
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="flex shrink-0 items-center gap-1 border-b px-2 py-1">
+        {drawings.map((drawing) => (
+          <Button
+            key={drawing.key}
+            size="xs"
+            variant={drawing === current ? "outline" : "ghost-muted"}
+            onClick={() => {
+              setTab(drawing.key);
+              setReveal(undefined);
+            }}
+          >
+            {drawing.name}
+          </Button>
+        ))}
+        <div className="flex-1" />
+        {list.length > 1 ? (
+          <select
+            aria-label="Design"
+            className="h-6 rounded-md border bg-background px-1 text-xs"
+            value={project}
+            onChange={(event) => {
+              setChosen(event.target.value);
+              setSelection(undefined);
+              setTab(null);
+            }}
+          >
+            {list.map((design) => (
+              <option key={design.project} value={design.project}>
+                {design.name}
+              </option>
+            ))}
+          </select>
+        ) : null}
+        {scene?.kind === "board" ? (
+          <Button
+            size="xs"
+            variant={showLayers ? "outline" : "ghost-muted"}
+            onClick={() => setShowLayers((shown) => !shown)}
+          >
+            <LayersIcon />
+            Layers
+          </Button>
+        ) : null}
+        <Button
+          size="icon-xs"
+          variant="ghost-muted"
+          aria-label="Reload design"
+          disabled={loaded.isPending || !project}
+          onClick={() => loaded.refresh()}
+        >
+          <RefreshCwIcon className={cn(loaded.isPending && "animate-spin")} />
+        </Button>
+      </div>
+      <div className="relative min-h-0 flex-1">
+        {scene ? (
+          <>
+            <DesignCanvas
+              className="absolute inset-0"
+              scene={scene}
+              dark={resolvedTheme === "dark"}
+              hidden={hidden}
+              selectedIds={selectedIds}
+              focus={focus}
+              reveal={reveal}
+              onPick={pick}
+            />
+            {scene.items.length === 0 ? (
+              <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-sm text-muted-foreground">
+                {scene.kind === "board" ? "The board is empty." : "This sheet is empty."} Ask Kitty
+                to design it, or draw it in KiCad.
+              </div>
+            ) : null}
+            {showLayers && scene.kind === "board" ? (
+              <LayerList
+                scene={scene}
+                hidden={hidden}
+                onToggle={(paint) =>
+                  setToggled((previous) => {
+                    const next = new Set(previous);
+                    const key = `${scene.kind}:${paint}`;
+                    if (!next.delete(key)) next.add(key);
+                    return next;
+                  })
+                }
+              />
+            ) : null}
+            {selectedItem ? (
+              <Properties
+                item={selectedItem}
+                otherName={other?.drawing.name}
+                onShowOther={() => {
+                  if (!other) return;
+                  setTab(other.drawing.key);
+                  setReveal(other.item);
+                }}
+                onPickNet={(net) => selection && setSelection({ ...selection, net })}
+                onClose={() => setSelection(undefined)}
+              />
+            ) : null}
+          </>
+        ) : (
+          <div className="flex h-full items-center justify-center p-6 text-center text-sm text-muted-foreground">
+            {loaded.error
+              ? loaded.error
+              : current?.error
+                ? `Could not read ${current.file}: ${current.error}`
+                : "Loading design…"}
+          </div>
+        )}
+      </div>
+      <div className="flex shrink-0 items-center gap-3 border-t px-2 py-1 text-xs text-muted-foreground">
+        <span className="truncate font-mono">{current?.file}</span>
+        {scene ? (
+          <span className="shrink-0">
+            {scene.items.filter(isPart).length} parts
+            {selection?.net ? ` · net ${displayNet(selection.net)}` : ""}
+          </span>
+        ) : null}
+        {source && source.omitted > 0 ? (
+          <span className="shrink-0">{source.omitted} file(s) too large to show</span>
+        ) : null}
+      </div>
+    </div>
+  );
+}

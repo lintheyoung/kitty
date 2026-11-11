@@ -1,0 +1,99 @@
+import type { Scene, SceneItem } from "@t3tools/shared/kicad/scene";
+import { MaximizeIcon, MinusIcon, PlusIcon } from "lucide-react";
+import { useEffect, useRef } from "react";
+
+import { cn } from "~/lib/utils";
+
+import { Button } from "../ui/button";
+import { CanvasController } from "./canvasController.ts";
+import { paletteFor, SELECTION_COLOR, SELECTION_COLOR_LIGHT } from "./scenePaint.ts";
+
+const FONT_FAMILY = 'ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif';
+
+/** A zoomable, clickable drawing of a schematic sheet or a board. */
+export function DesignCanvas(props: {
+  readonly scene: Scene;
+  readonly dark: boolean;
+  /** Paints (layers) not drawn. */
+  readonly hidden: ReadonlySet<string>;
+  readonly selectedIds: ReadonlySet<string>;
+  /** When set, items it rejects are dimmed. */
+  readonly focus?: ((item: SceneItem) => boolean) | undefined;
+  /** An item to bring into view, e.g. after cross-probing from the other drawing. */
+  readonly reveal?: SceneItem | undefined;
+  readonly onPick: (item: SceneItem | undefined) => void;
+  readonly className?: string;
+}) {
+  const controller = useRef<CanvasController | null>(null);
+  const attach = (canvas: HTMLCanvasElement) => {
+    const created = new CanvasController(canvas);
+    controller.current = created;
+    return () => {
+      created.destroy();
+      controller.current = null;
+    };
+  };
+  const { scene, dark, hidden, selectedIds, focus, onPick, reveal } = props;
+  // The board always sits on a dark canvas, so its selection outline stays light.
+  const lightSurface = scene.kind === "schematic" && !dark;
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- pushes the latest drawing and options into the imperative canvas controller
+  useEffect(() => {
+    controller.current?.update({
+      scene,
+      onPick,
+      options: {
+        color: paletteFor(scene, dark),
+        hidden,
+        selection: selectedIds,
+        selectionColor: lightSurface ? SELECTION_COLOR_LIGHT : SELECTION_COLOR,
+        focus,
+        fontFamily: FONT_FAMILY,
+      },
+    });
+  }, [scene, dark, hidden, selectedIds, focus, onPick, lightSurface]);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- scrolls the imperative canvas to an item chosen outside it
+  useEffect(() => {
+    if (reveal) controller.current?.reveal(reveal);
+  }, [reveal]);
+  return (
+    <div
+      className={cn(
+        "relative min-h-0 min-w-0",
+        scene.kind === "board" && "bg-pcb",
+        props.className,
+      )}
+    >
+      <canvas
+        ref={attach}
+        aria-label={scene.kind === "board" ? "Board drawing" : "Schematic drawing"}
+        className="absolute inset-0 block size-full cursor-crosshair touch-none"
+      />
+      <div className="absolute right-2 bottom-2 flex gap-1 rounded-md border bg-background/90 p-0.5 shadow-sm">
+        <Button
+          size="icon-xs"
+          variant="ghost"
+          aria-label="Zoom out"
+          onClick={() => controller.current?.zoom(1 / 1.4)}
+        >
+          <MinusIcon />
+        </Button>
+        <Button
+          size="icon-xs"
+          variant="ghost"
+          aria-label="Zoom in"
+          onClick={() => controller.current?.zoom(1.4)}
+        >
+          <PlusIcon />
+        </Button>
+        <Button
+          size="icon-xs"
+          variant="ghost"
+          aria-label="Fit to window"
+          onClick={() => controller.current?.fit()}
+        >
+          <MaximizeIcon />
+        </Button>
+      </div>
+    </div>
+  );
+}

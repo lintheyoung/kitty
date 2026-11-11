@@ -5,6 +5,8 @@ import { RightPanelTabs, type RightPanelTabsProps } from "../RightPanelTabs";
 type ChatRightPanelProps = Omit<RightPanelTabsProps, "mode" | "inlineSize" | "maximized"> & {
   readonly sheet: boolean;
   readonly maximized: boolean;
+  /** Design mode: the panel fills the left of the row and the chat sits on the right. */
+  readonly leading: boolean;
   readonly workspaceLayoutElement: HTMLElement | null;
   readonly widthStorageKey: string;
   readonly sheetAnimationDurationMs: number;
@@ -24,6 +26,7 @@ export function ChatRightPanel(props: ChatRightPanelProps) {
     sheetAnimationDurationMs,
     onCloseSheet,
     maximized,
+    leading,
     layoutControls,
     ...tabs
   } = props;
@@ -32,7 +35,15 @@ export function ChatRightPanel(props: ChatRightPanelProps) {
     widthStorageKey,
   });
   if (!sheet) {
-    return <RightPanelTabs {...tabs} mode="inline" maximized={maximized} inlineSize={inlineSize} />;
+    return (
+      <RightPanelTabs
+        {...tabs}
+        mode="inline"
+        maximized={maximized}
+        leading={leading}
+        inlineSize={inlineSize}
+      />
+    );
   }
   return (
     <RightPanelSheet

@@ -228,6 +228,7 @@ const RPC_AGGREGATES = {
   [WS_METHODS.hardwareDrc]: "hardware",
   [WS_METHODS.hardwareBom]: "hardware",
   [WS_METHODS.hardwarePreview]: "hardware",
+  [WS_METHODS.hardwareDesignSource]: "hardware",
   [WS_METHODS.hardwareTestPlans]: "hardware",
   [WS_METHODS.hardwareTestCreate]: "hardware",
   [WS_METHODS.hardwareTestRun]: "hardware",

@@ -8,7 +8,7 @@ import type {
   KicadViolation,
 } from "@t3tools/contracts";
 
-import { child, children, parseSexpr, type Sexpr, value } from "./sexpr.ts";
+import { child, children, parseSexpr, type Sexpr, value } from "@t3tools/shared/kicad/sexpr";
 
 const MAX_VIOLATIONS = 100;
 

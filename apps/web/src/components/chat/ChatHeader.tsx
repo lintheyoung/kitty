@@ -10,7 +10,7 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import { ChevronDownIcon, CpuIcon } from "lucide-react";
+import { ChevronDownIcon, CircuitBoardIcon, CpuIcon } from "lucide-react";
 import {
   memo,
   useEffect,
@@ -59,6 +59,8 @@ interface ChatHeaderProps {
   onFindInThread?: ((threadRef: ScopedThreadRef) => void) | undefined;
   /** Opens the Hardware panel (boards, builds, KiCad designs) for this thread. */
   onOpenHardware?: (() => void) | undefined;
+  /** Opens the board designer: the schematic and PCB as live drawings. */
+  onOpenDesigner?: (() => void) | undefined;
 }
 
 function resolveRenameCommit(input: {
@@ -87,6 +89,7 @@ export const ChatHeader = memo(function ChatHeader({
   onOpenProjectSettings,
   onFindInThread,
   onOpenHardware,
+  onOpenDesigner,
 }: ChatHeaderProps) {
   const activeProjectName = activeProject?.isScratch ? "No project" : activeProject?.title;
   const activeProjectCwd = activeProject?.workspaceRoot ?? null;
@@ -435,6 +438,12 @@ export const ChatHeader = memo(function ChatHeader({
         </WorkspaceBreadcrumbItem>
       </WorkspaceBreadcrumb>
       {isServerThread ? <GuestShareIndicator threadRef={activeThreadRef} /> : null}
+      {onOpenDesigner ? (
+        <Button size="xs" variant="ghost-muted" className="shrink-0" onClick={onOpenDesigner}>
+          <CircuitBoardIcon />
+          Designer
+        </Button>
+      ) : null}
       {onOpenHardware ? (
         <Button size="xs" variant="ghost-muted" className="shrink-0" onClick={onOpenHardware}>
           <CpuIcon />

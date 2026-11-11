@@ -186,6 +186,25 @@ export const KicadPreviewResult = Schema.Struct({
 });
 export type KicadPreviewResult = typeof KicadPreviewResult.Type;
 
+/** The text of one design file, for the client to draw. */
+export const KicadDesignFile = Schema.Struct({
+  /** Sheet name, or "Board". */
+  name: Schema.String,
+  /** The file, relative to the workspace. */
+  file: Schema.String,
+  source: Schema.String,
+});
+export type KicadDesignFile = typeof KicadDesignFile.Type;
+
+export const KicadDesignSourceResult = Schema.Struct({
+  /** Root sheet first, then its sub-sheets in the order they are found. */
+  sheets: Schema.Array(KicadDesignFile),
+  board: Schema.optional(KicadDesignFile),
+  /** Files left out to keep the reply small. */
+  omitted: Schema.Int,
+});
+export type KicadDesignSourceResult = typeof KicadDesignSourceResult.Type;
+
 export const KicadFabExportInput = Schema.Struct({
   path: BoardPath,
   outputDir: Schema.optional(

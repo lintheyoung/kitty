@@ -363,16 +363,26 @@ function DesignRow(props: {
           <div className="truncate text-sm font-medium">{design.name}</div>
           <div className="truncate font-mono text-2xs text-muted-foreground">{design.project}</div>
         </div>
-        <Button
-          size="xs"
-          variant="outline"
-          onClick={() =>
-            void runAtomCommand(appAtomRegistry, hardwareOpenInKicad, { environmentId, input })
-          }
-        >
-          <ExternalLinkIcon />
-          Open in KiCad
-        </Button>
+        <div className="flex shrink-0 gap-1">
+          <Button
+            size="xs"
+            variant="outline"
+            onClick={() => useRightPanelStore.getState().open(props.threadRef, "designer")}
+          >
+            <CircuitBoardIcon />
+            Designer
+          </Button>
+          <Button
+            size="xs"
+            variant="ghost-muted"
+            onClick={() =>
+              void runAtomCommand(appAtomRegistry, hardwareOpenInKicad, { environmentId, input })
+            }
+          >
+            <ExternalLinkIcon />
+            KiCad
+          </Button>
+        </div>
       </div>
       <div className="flex flex-wrap gap-1">
         {ACTIONS.map((action) => {
@@ -448,7 +458,7 @@ function NewHardwareProject(props: {
         // Land on the new product with its boards and designs in view.
         useRightPanelStore
           .getState()
-          .open(scopeThreadRef(environmentId, opened.threadId), "hardware");
+          .open(scopeThreadRef(environmentId, opened.threadId), "designer");
         return;
       }
       await new Promise((resolve) => setTimeout(resolve, 250));

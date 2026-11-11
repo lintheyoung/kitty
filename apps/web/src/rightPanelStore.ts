@@ -23,6 +23,7 @@ const RIGHT_PANEL_KINDS = [
   "pull-requests",
   "side-chat",
   "hardware",
+  "designer",
 ] as const;
 export type RightPanelKind = (typeof RIGHT_PANEL_KINDS)[number];
 
@@ -49,6 +50,7 @@ export type RightPanelSurface =
     }
   | { id: "diff"; kind: "diff" }
   | { id: "hardware"; kind: "hardware" }
+  | { id: "designer"; kind: "designer" }
   | {
       id: "files";
       kind: "files";
@@ -223,6 +225,8 @@ const singletonSurface = (
       return { id: "device", kind };
     case "hardware":
       return { id: "hardware", kind };
+    case "designer":
+      return { id: "designer", kind };
   }
 };
 

@@ -534,6 +534,26 @@
     "./cloneUrl": {
       "types": "./src/cloneUrl.ts",
       "import": "./src/cloneUrl.ts"
+    },
+    "./kicad/sexpr": {
+      "types": "./src/kicad/sexpr.ts",
+      "import": "./src/kicad/sexpr.ts"
+    },
+    "./kicad/scene": {
+      "types": "./src/kicad/scene.ts",
+      "import": "./src/kicad/scene.ts"
+    },
+    "./kicad/schematicScene": {
+      "types": "./src/kicad/schematicScene.ts",
+      "import": "./src/kicad/schematicScene.ts"
+    },
+    "./kicad/boardScene": {
+      "types": "./src/kicad/boardScene.ts",
+      "import": "./src/kicad/boardScene.ts"
+    },
+    "./kicad/pick": {
+      "types": "./src/kicad/pick.ts",
+      "import": "./src/kicad/pick.ts"
     }
   },
   "scripts": {

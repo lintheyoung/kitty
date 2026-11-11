@@ -205,6 +205,13 @@ export const hardwarePreview = createEnvironmentRpcCommand(connectionAtomRuntime
   label: "environment-data:hardware:preview",
   tag: WS_METHODS.hardwarePreview,
 });
+/** A design's schematic sheets and board as text, drawn by the designer. */
+export const hardwareDesignSource = createEnvironmentRpcQueryAtomFamily(connectionAtomRuntime, {
+  label: "environment-data:hardware:design-source",
+  tag: WS_METHODS.hardwareDesignSource,
+  staleTimeMs: 5_000,
+  idleTtlMs: 5 * 60_000,
+});
 export const hardwareFabExport = createEnvironmentRpcCommand(connectionAtomRuntime, {
   label: "environment-data:hardware:fab-export",
   tag: WS_METHODS.hardwareFabExport,

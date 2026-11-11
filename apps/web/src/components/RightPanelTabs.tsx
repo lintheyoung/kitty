@@ -36,6 +36,7 @@ import { restrictToFirstScrollableAncestor, restrictToHorizontalAxis } from "@dn
 import { horizontalListSortingStrategy, SortableContext, useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import {
+  CircuitBoard,
   Cpu,
   Smartphone,
   ChevronDown,
@@ -109,6 +110,8 @@ import { surfaceShortcutKey } from "~/lib/surfaceShortcutKey";
 export interface RightPanelTabsProps {
   mode: PreviewPanelMode;
   maximized?: boolean;
+  /** The panel leads the row and fills it; the chat sits beside it at a fixed width. */
+  leading?: boolean;
   open?: boolean;
   keybindings: ResolvedKeybindingsConfig;
   getShortcutContext: () => ShortcutMatchContext;
@@ -614,6 +617,8 @@ function surfaceTitle(
       return "Side chat";
     case "hardware":
       return "Hardware";
+    case "designer":
+      return "Designer";
     case "preview": {
       const snapshot = surface.resourceId ? sessions[surface.resourceId] : null;
       if (!snapshot || snapshot.navStatus._tag === "Idle") return "Browser";
@@ -706,6 +711,8 @@ function SurfaceIcon({
       return <SideChatTabIcon environmentId={environmentId} threadId={surface.threadId} />;
     case "hardware":
       return <Cpu className="size-3 shrink-0" />;
+    case "designer":
+      return <CircuitBoard className="size-3 shrink-0" />;
     case "device":
       return surface.target?.platform === "ios" ? (
         <AppleIcon className="size-3 shrink-0" />
@@ -1361,6 +1368,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
       }
       mode={props.mode}
       {...(props.maximized !== undefined ? { maximized: props.maximized } : {})}
+      {...(props.leading ? { fill: true } : {})}
       {...(props.open !== undefined ? { open: props.open } : {})}
       {...(props.widthStorageKey !== undefined ? { widthStorageKey: props.widthStorageKey } : {})}
       {...(props.defaultWidth !== undefined ? { defaultWidth: props.defaultWidth } : {})}

@@ -72,3 +72,29 @@ export function value(node: Sexpr | undefined, name: string): string | undefined
   const found = child(node, name)?.[1];
   return typeof found === "string" ? found : undefined;
 }
+
+/** The numeric atoms after the head of a list: `(at 1 2 90)` gives `[1, 2, 90]`. */
+export function numbers(node: Sexpr | undefined): ReadonlyArray<number> {
+  if (!isList(node)) return [];
+  const result: Array<number> = [];
+  for (const item of node.slice(1)) {
+    if (typeof item !== "string") continue;
+    const parsed = Number(item);
+    if (Number.isFinite(parsed)) result.push(parsed);
+  }
+  return result;
+}
+
+/** The string atoms after the head of a list. */
+export function atoms(node: Sexpr | undefined): ReadonlyArray<string> {
+  if (!isList(node)) return [];
+  return node.slice(1).filter((item): item is string => typeof item === "string");
+}
+
+/** True for `(name yes)` and for a bare `name` atom, KiCad's two ways to set a flag. */
+export function flag(node: Sexpr | undefined, name: string): boolean {
+  if (!isList(node)) return false;
+  if (node.includes(name)) return true;
+  const found = child(node, name);
+  return found !== undefined && found[1] !== "no";
+}
