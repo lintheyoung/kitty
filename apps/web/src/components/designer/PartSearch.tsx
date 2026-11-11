@@ -38,13 +38,15 @@ interface SearchState {
   readonly error?: string;
 }
 
-/** Finds parts in JLC's catalogue and adds them to the design's library. */
+/** Finds parts in JLC's catalogue and places them on the schematic. */
 export function PartSearch(props: {
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
   readonly projectId: ProjectId;
   /** The design's .kicad_pro. */
   readonly path: string;
+  /** Puts an imported part on the sheet; resolves to whether it was placed. */
+  readonly onPlace: (part: JlcImportedPart) => Promise<boolean>;
 }) {
   const [query, setQuery] = useState("");
   const [basicOnly, setBasicOnly] = useState(false);
@@ -86,12 +88,15 @@ export function PartSearch(props: {
       },
       options,
     );
-    setImporting(undefined);
     if (result._tag === "Success") {
-      setAdded((previous) => ({ ...previous, [part.lcsc]: result.value }));
+      const imported = result.value;
+      if (await props.onPlace(imported)) {
+        setAdded((previous) => ({ ...previous, [part.lcsc]: imported }));
+      }
     } else {
       setImportError(formatEnvironmentQueryError(result.cause));
     }
+    setImporting(undefined);
   };
 
   return (
@@ -161,16 +166,16 @@ export function PartSearch(props: {
                   {part.unitPrice !== undefined ? ` · $${part.unitPrice.toFixed(4)}` : ""}
                 </div>
                 {imported ? (
-                  <div className="text-success-foreground">In the library as {imported.symbol}</div>
+                  <div className="text-success-foreground">Placed on the sheet</div>
                 ) : null}
               </div>
               <Button
                 size="xs"
                 variant="outline"
-                disabled={importing !== undefined || imported !== undefined}
+                disabled={importing !== undefined}
                 onClick={() => void add(part)}
               >
-                {imported ? "Added" : importing === part.lcsc ? "Adding…" : "Add"}
+                {importing === part.lcsc ? "Placing…" : imported ? "Place again" : "Place"}
               </Button>
             </div>
           );

@@ -274,3 +274,94 @@ it.effect("returns the design's sheets and board as text, following sub-sheets",
     assert.equal(design.omitted, 0);
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
+
+const EDIT_LIBRARY = `(kicad_symbol_lib
+  (symbol "R"
+    (property "Reference" "R" (at 0 2.54 0))
+    (property "Value" "R" (at 0 -2.54 0))
+    (symbol "R_0_1"
+      (pin passive line (at -5.08 0 0) (length 2.54) (name "A") (number "1"))
+      (pin passive line (at 5.08 0 180) (length 2.54) (name "B") (number "2"))
+    )
+  )
+)`;
+const EDIT_SHEET = `(kicad_sch\n\t(version 20260306)\n\t(uuid "11111111-2222-3333-4444-555555555555")\n\t(paper "A4")\n\t(lib_symbols)\n)\n`;
+const EDIT_NETLIST = `(export (components (comp (ref "R1") (value "10k")))
+  (nets (net (code "1") (name "/EN") (node (ref "R1") (pin "2") (pinfunction "B")))
+        (net (code "2") (name "/OTHER") (node (ref "R1") (pin "1") (pinfunction "A")))))`;
+
+/** A fake kicad-cli for edits: a netlist for `export netlist`, an ERC report for `erc`. */
+const editCli = (fail: boolean) =>
+  ProcessRunner.ProcessRunner.of({
+    run: (input) =>
+      Effect.gen(function* () {
+        if (input.args[0] === "version") return result("10.0.7\n");
+        if (fail) return result("", 1, "Failed to load schematic");
+        const fs = yield* FileSystem.FileSystem;
+        const output = input.args[input.args.indexOf("-o") + 1] ?? "";
+        yield* fs
+          .writeFileString(output, input.args[1] === "erc" ? ERC : EDIT_NETLIST)
+          .pipe(Effect.orDie);
+        return result("");
+      }).pipe(Effect.provide(NodeServices.layer)),
+  });
+
+it.effect("edits a schematic, reports what KiCad resolved, and undoes it", () =>
+  Effect.gen(function* () {
+    const root = yield* workspace();
+    const fs = yield* FileSystem.FileSystem;
+    const file = `${root}/hw/keycap/keycap.kicad_sch`;
+    yield* fs.makeDirectory(`${root}/hw/keycap/lib`);
+    yield* fs.writeFileString(`${root}/hw/keycap/lib/jlc.kicad_sym`, EDIT_LIBRARY);
+    yield* fs.writeFileString(file, EDIT_SHEET);
+    const target = { workspaceRoot: root, path: "hw/keycap/keycap.kicad_pro" };
+    const place = {
+      op: "place" as const,
+      symbol: "jlc:R",
+      value: "10k",
+      nets: { "1": "+3V3", "2": "EN" },
+    };
+
+    yield* withCli(editCli(false), (service) =>
+      Effect.gen(function* () {
+        const edited = yield* service.schematicEdit({ ...target, edits: [place] });
+        assert.equal(edited.schematic, "hw/keycap/keycap.kicad_sch");
+        assert.deepStrictEqual(edited.erc, { errors: 1, warnings: 0 });
+        assert.deepStrictEqual(edited.parts[0]?.pins, [
+          { number: "1", name: "A", net: "/OTHER" },
+          { number: "2", name: "B", net: "/EN" },
+        ]);
+        // KiCad put pin 1 on another net than the one asked for.
+        assert.deepStrictEqual(edited.warnings, ["R1 pin 1 is on /OTHER, not +3V3."]);
+        const saved = yield* fs.readFileString(file);
+        assert.include(saved, '(lib_id "jlc:R")');
+
+        const undone = yield* service.schematicHistory({ ...target, step: "undo" });
+        assert.deepStrictEqual(undone, { ...undone, applied: true, undo: 0, redo: 1 });
+        assert.equal(yield* fs.readFileString(file), EDIT_SHEET);
+        const again = yield* service.schematicHistory({ ...target, step: "undo" });
+        assert.equal(again.applied, false);
+        yield* service.schematicHistory({ ...target, step: "redo" });
+        assert.equal(yield* fs.readFileString(file), saved);
+
+        // A save from somewhere else starts the history over.
+        yield* fs.writeFileString(file, EDIT_SHEET);
+        const stale = yield* service.schematicHistory({ ...target, step: "undo" });
+        assert.equal(stale.applied, false);
+      }),
+    );
+
+    // Nothing is saved when KiCad cannot read the result, or a part is not from JLC.
+    const unreadable = yield* withCli(editCli(true), (service) =>
+      service.schematicEdit({ ...target, edits: [place] }).pipe(Effect.flip),
+    );
+    assert.include(unreadable.message, "nothing was changed");
+    const foreign = yield* withCli(editCli(false), (service) =>
+      service
+        .schematicEdit({ ...target, edits: [{ op: "place", symbol: "Device:R" }] })
+        .pipe(Effect.flip),
+    );
+    assert.equal(foreign.code, "invalid_argument");
+    assert.equal(yield* fs.readFileString(file), EDIT_SHEET);
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);

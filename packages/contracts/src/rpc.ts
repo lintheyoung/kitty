@@ -326,6 +326,8 @@ import {
   HardwareProjectsResult,
   HardwareDesignInput,
   HardwareJlcImportInput,
+  HardwareSchematicEditInput,
+  HardwareSchematicHistoryInput,
   HardwarePreviewInput,
   HardwareProjectTestCreateInput,
   HardwareProjectTestRunInput,
@@ -350,6 +352,7 @@ import {
   HardwarePinmapSyncResult,
 } from "./kicad.ts";
 import { JlcImportedPart, JlcPartSearchInput, JlcPartSearchResult } from "./jlcParts.ts";
+import { SchematicEditResult, SchematicHistoryResult } from "./schematicEdit.ts";
 import {
   ServerConfigStreamEvent,
   DesktopUpdateCommitInput,
@@ -553,6 +556,8 @@ export const WS_METHODS = {
   hardwareDesignStamp: "hardware.designStamp",
   hardwareJlcSearch: "hardware.jlcSearch",
   hardwareJlcImport: "hardware.jlcImport",
+  hardwareSchematicEdit: "hardware.schematicEdit",
+  hardwareSchematicHistory: "hardware.schematicHistory",
   hardwareTestPlans: "hardware.testPlans",
   hardwareTestCreate: "hardware.testCreate",
   hardwareTestRun: "hardware.testRun",
@@ -1892,6 +1897,18 @@ const WsHardwareJlcImportRpc = Rpc.make(WS_METHODS.hardwareJlcImport, {
   error: Schema.Union([HardwareToolError, EnvironmentAuthorizationError]),
 });
 
+const WsHardwareSchematicEditRpc = Rpc.make(WS_METHODS.hardwareSchematicEdit, {
+  payload: HardwareSchematicEditInput,
+  success: SchematicEditResult,
+  error: Schema.Union([HardwareToolError, EnvironmentAuthorizationError]),
+});
+
+const WsHardwareSchematicHistoryRpc = Rpc.make(WS_METHODS.hardwareSchematicHistory, {
+  payload: HardwareSchematicHistoryInput,
+  success: SchematicHistoryResult,
+  error: Schema.Union([HardwareToolError, EnvironmentAuthorizationError]),
+});
+
 const WsHardwareFabExportRpc = Rpc.make(WS_METHODS.hardwareFabExport, {
   payload: HardwareDesignInput,
   success: KicadFabExportResult,
@@ -2426,6 +2443,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsHardwareDesignStampRpc,
   WsHardwareJlcSearchRpc,
   WsHardwareJlcImportRpc,
+  WsHardwareSchematicEditRpc,
+  WsHardwareSchematicHistoryRpc,
   WsHardwareTestPlansRpc,
   WsHardwareTestCreateRpc,
   WsHardwareTestRunRpc,

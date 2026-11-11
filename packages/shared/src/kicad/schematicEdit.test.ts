@@ -173,6 +173,25 @@ describe("schematic edits", () => {
     expect(result.source).not.toContain('"SDA"');
   });
 
+  it("slides and turns a part from where it is", () => {
+    const placed = applySchematicEdits(
+      BLANK,
+      [{ op: "place", symbol: "jlc:R", at: { x: 50.8, y: 50.8 }, nets: { "1": "A", "2": "B" } }],
+      context(),
+    ).source;
+    const moved = applySchematicEdits(
+      placed,
+      [
+        { op: "move", reference: "R1", by: { x: 12.7, y: -2.54 } },
+        { op: "move", reference: "R1", rotateBy: 90 },
+        { op: "move", reference: "R1", rotateBy: 90 },
+      ],
+      context(),
+    );
+    expect(moved.placed.at(-1)).toMatchObject({ at: { x: 63.5, y: 48.26 }, rotation: 180 });
+    expect(netsOf(moved.source)).toEqual({ "R1.1": "A", "R1.2": "B" });
+  });
+
   it("marks unused pins as not connected", () => {
     const { source } = applySchematicEdits(
       BLANK,

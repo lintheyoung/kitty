@@ -30,6 +30,8 @@ import {
   KittyPinmap,
   type SchematicEditInput,
   type SchematicEditResult,
+  type SchematicHistoryResult,
+  type SchematicHistoryStep,
 } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { applySchematicEdits, SchematicEditError } from "@t3tools/shared/kicad/schematicEdit";
@@ -129,6 +131,10 @@ export class KicadService extends Context.Service<
     readonly schematicEdit: (
       input: InWorkspace<SchematicEditInput>,
     ) => Effect.Effect<SchematicEditResult, HardwareToolError>;
+    /** Steps back or forward through the edits made with `schematicEdit`. */
+    readonly schematicHistory: (
+      input: InWorkspace<{ readonly path: string; readonly step: SchematicHistoryStep }>,
+    ) => Effect.Effect<SchematicHistoryResult, HardwareToolError>;
     /** A value that changes when the design's schematic or board files are saved. */
     readonly designStamp: (
       input: InWorkspace<{ readonly path: string }>,
@@ -1101,6 +1107,47 @@ export const make = Effect.fn("KicadService.make")(function* () {
   });
 
   const isEditError = Schema.is(SchematicEditError);
+  const HISTORY_LIMIT = 50;
+  /** Earlier and undone versions of each schematic edited here, newest last. */
+  const histories = new Map<
+    string,
+    { undo: Array<string>; redo: Array<string>; current: string }
+  >();
+  /** The file's history, started over when someone else has saved the file since. */
+  const historyOf = (file: string, onDisk: string) => {
+    const known = histories.get(file);
+    if (known && known.current === onDisk) return known;
+    const fresh = { undo: [], redo: [], current: onDisk };
+    histories.set(file, fresh);
+    return fresh;
+  };
+
+  const schematicHistory = Effect.fn("KicadService.schematicHistory")(function* (
+    input: InWorkspace<{ readonly path: string; readonly step: SchematicHistoryStep }>,
+  ) {
+    const { file, relative } = yield* resolveDesign(input.workspaceRoot, input.path, ".kicad_sch");
+    const onDisk = yield* fs
+      .readFileString(file)
+      .pipe(Effect.mapError((cause) => failure("invalid_path", cause.message)));
+    const history = historyOf(file, onDisk);
+    const [from, to] =
+      input.step === "undo" ? [history.undo, history.redo] : [history.redo, history.undo];
+    const target = from.pop();
+    if (target !== undefined) {
+      to.push(onDisk);
+      history.current = target;
+      yield* fs
+        .writeFileString(file, target)
+        .pipe(Effect.mapError((cause) => failure("command_failed", cause.message)));
+    }
+    return {
+      schematic: relative,
+      applied: target !== undefined,
+      undo: history.undo.length,
+      redo: history.redo.length,
+    } satisfies SchematicHistoryResult;
+  });
+
   const schematicEdit = Effect.fn("KicadService.schematicEdit")(function* (
     input: InWorkspace<SchematicEditInput>,
   ) {
@@ -1182,6 +1229,11 @@ export const make = Effect.fn("KicadService.make")(function* () {
       }),
     );
     yield* io(fs.writeFileString(file, edited.source));
+    const history = historyOf(file, before);
+    history.undo.push(before);
+    if (history.undo.length > HISTORY_LIMIT) history.undo.shift();
+    history.redo.length = 0;
+    history.current = edited.source;
 
     const warnings: Array<string> = [];
     const parts = edited.placed.map((part) => {
@@ -1218,6 +1270,7 @@ export const make = Effect.fn("KicadService.make")(function* () {
 
   return KicadService.of({
     schematicEdit,
+    schematicHistory,
     upgradeLibraries,
     boardModel,
     designStamp,

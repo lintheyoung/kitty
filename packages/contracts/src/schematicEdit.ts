@@ -44,7 +44,13 @@ export const SchematicEdit = Schema.Union([
   Schema.Struct({
     op: Schema.Literal("move"),
     reference: Reference,
-    at: SheetPoint,
+    at: Schema.optional(SheetPoint),
+    by: Schema.optional(
+      Schema.Struct({ x: Schema.Number, y: Schema.Number }).annotate({
+        description: "How far to move the part from where it is, instead of `at`.",
+      }),
+    ),
+    rotateBy: Schema.optional(Rotation),
     rotation: Schema.optional(Rotation),
     mirror: Schema.optional(Schema.Literals(["x", "y"])),
   }),
@@ -76,6 +82,20 @@ export const SchematicEditInput = Schema.Struct({
   }),
 });
 export type SchematicEditInput = typeof SchematicEditInput.Type;
+
+/** Which way to step through a schematic's edit history. */
+export const SchematicHistoryStep = Schema.Literals(["undo", "redo"]);
+export type SchematicHistoryStep = typeof SchematicHistoryStep.Type;
+
+export const SchematicHistoryResult = Schema.Struct({
+  schematic: Schema.String,
+  /** False when there was nothing to undo or redo. */
+  applied: Schema.Boolean,
+  /** How many steps remain each way. */
+  undo: Schema.Int,
+  redo: Schema.Int,
+});
+export type SchematicHistoryResult = typeof SchematicHistoryResult.Type;
 
 export const SchematicEditedPart = Schema.Struct({
   reference: Schema.String,

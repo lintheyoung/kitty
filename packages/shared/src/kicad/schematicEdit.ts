@@ -45,7 +45,11 @@ export type SchematicEdit =
   | {
       readonly op: "move";
       readonly reference: string;
-      readonly at: Point;
+      /** Where the part goes; or `by`, how far it moves from where it is. */
+      readonly at?: Point | undefined;
+      readonly by?: Point | undefined;
+      /** Turn the part this many degrees counter-clockwise from how it sits. */
+      readonly rotateBy?: number | undefined;
       readonly rotation?: number | undefined;
       readonly mirror?: Mirror | undefined;
     }
@@ -647,8 +651,10 @@ function move(
   const before = find(part, "at") ?? [];
   const from = positionOf(part);
   const fromRotation = num(before[3]);
-  const at = { x: snap(edit.at.x), y: snap(edit.at.y) };
-  const rotation = turns(edit.rotation ?? fromRotation) * 90;
+  const at = edit.at
+    ? { x: snap(edit.at.x), y: snap(edit.at.y) }
+    : { x: from.x + (edit.by?.x ?? 0), y: from.y + (edit.by?.y ?? 0) };
+  const rotation = turns(edit.rotation ?? fromRotation + (edit.rotateBy ?? 0)) * 90;
   const mirror = edit.mirror ?? mirrorOf(part);
   // Fields keep their place relative to the part when it only slides.
   const slides = rotation === fromRotation && mirror === mirrorOf(part);

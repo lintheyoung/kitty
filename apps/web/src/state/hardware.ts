@@ -233,6 +233,15 @@ export const hardwareJlcImport = createEnvironmentRpcCommand(connectionAtomRunti
   label: "environment-data:hardware:jlc-import",
   tag: WS_METHODS.hardwareJlcImport,
 });
+/** Changes a design's schematic; the same edits the agent's sch_edit tool makes. */
+export const hardwareSchematicEdit = createEnvironmentRpcCommand(connectionAtomRuntime, {
+  label: "environment-data:hardware:schematic-edit",
+  tag: WS_METHODS.hardwareSchematicEdit,
+});
+export const hardwareSchematicHistory = createEnvironmentRpcCommand(connectionAtomRuntime, {
+  label: "environment-data:hardware:schematic-history",
+  tag: WS_METHODS.hardwareSchematicHistory,
+});
 export const hardwareFabExport = createEnvironmentRpcCommand(connectionAtomRuntime, {
   label: "environment-data:hardware:fab-export",
   tag: WS_METHODS.hardwareFabExport,

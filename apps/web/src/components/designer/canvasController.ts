@@ -1,6 +1,6 @@
 /** Owns one canvas: its view, pointer handling and redraws. React only feeds it props. */
 import { pickItem } from "@t3tools/shared/kicad/pick";
-import type { Scene, SceneItem } from "@t3tools/shared/kicad/scene";
+import type { Point, Scene, SceneItem } from "@t3tools/shared/kicad/scene";
 
 import { observeResize } from "~/lib/observeResize";
 
@@ -10,7 +10,13 @@ export interface CanvasState {
   readonly scene: Scene;
   readonly options: DrawOptions;
   readonly onPick: (item: SceneItem | undefined) => void;
+  /** When set, items it accepts can be dragged; the drop reports how far, in millimetres. */
+  readonly movable?: ((item: SceneItem) => boolean) | undefined;
+  readonly onMove?: ((item: SceneItem, by: Point) => void) | undefined;
 }
+
+/** Dragged parts land on the schematic grid. */
+const MOVE_GRID = 1.27;
 
 const DRAG_THRESHOLD_PX = 4;
 const PICK_TOLERANCE_PX = 4;
@@ -34,6 +40,10 @@ export class CanvasController {
   private frame = 0;
   private fitted: Scene | undefined;
   private drag: { readonly x: number; readonly y: number; moved: boolean } | undefined;
+  /** A part being dragged, and how far it has come from where it was picked up. */
+  private carry:
+    | { readonly item: SceneItem; readonly x: number; readonly y: number; by: Point }
+    | undefined;
   private readonly dispose: () => void;
 
   constructor(private readonly canvas: HTMLCanvasElement) {
@@ -60,6 +70,11 @@ export class CanvasController {
       if (event.button !== 0 && event.button !== 1) return;
       this.drag = { x: event.clientX, y: event.clientY, moved: false };
       canvas.setPointerCapture(event.pointerId);
+      const item = event.button === 0 ? this.itemAt(event) : undefined;
+      this.carry =
+        item && this.state?.movable?.(item)
+          ? { item, x: event.clientX, y: event.clientY, by: { x: 0, y: 0 } }
+          : undefined;
     };
     const onMove = (event: PointerEvent) => {
       const drag = this.drag;
@@ -67,6 +82,18 @@ export class CanvasController {
       const dx = event.clientX - drag.x;
       const dy = event.clientY - drag.y;
       if (!drag.moved && Math.hypot(dx, dy) < DRAG_THRESHOLD_PX) return;
+      if (this.carry) {
+        const grid = (pixels: number) =>
+          Math.round(pixels / this.view.scale / MOVE_GRID) * MOVE_GRID;
+        drag.moved = true;
+        this.carry.by = {
+          x: grid(event.clientX - this.carry.x),
+          y: grid(event.clientY - this.carry.y),
+        };
+        canvas.style.cursor = "move";
+        this.schedule();
+        return;
+      }
       this.drag = { x: event.clientX, y: event.clientY, moved: true };
       this.view = { ...this.view, x: this.view.x + dx, y: this.view.y + dy };
       canvas.style.cursor = "grabbing";
@@ -75,18 +102,19 @@ export class CanvasController {
     const onUp = (event: PointerEvent) => {
       const drag = this.drag;
       this.drag = undefined;
+      const carry = this.carry;
+      this.carry = undefined;
       canvas.style.cursor = "";
-      if (!drag || drag.moved || !this.state) return;
-      const rect = canvas.getBoundingClientRect();
-      const point = {
-        x: (event.clientX - rect.left - this.view.x) / this.view.scale,
-        y: (event.clientY - rect.top - this.view.y) / this.view.scale,
-      };
-      const { hidden } = this.state.options;
-      const visible = (item: SceneItem) => item.shapes.some((shape) => !hidden.has(shape.paint));
-      this.state.onPick(
-        pickItem(this.state.scene, point, PICK_TOLERANCE_PX / this.view.scale, visible),
-      );
+      if (!drag || !this.state) return;
+      if (carry && drag.moved) {
+        this.schedule();
+        if (event.type === "pointerup" && (carry.by.x !== 0 || carry.by.y !== 0)) {
+          this.state.onMove?.(carry.item, carry.by);
+        }
+        return;
+      }
+      if (drag.moved) return;
+      this.state.onPick(this.itemAt(event));
     };
     const onDouble = () => this.fit();
     canvas.addEventListener("wheel", onWheel, { passive: false });
@@ -153,6 +181,39 @@ export class CanvasController {
     this.schedule();
   }
 
+  private itemAt(event: PointerEvent): SceneItem | undefined {
+    if (!this.state) return undefined;
+    const rect = this.canvas.getBoundingClientRect();
+    const point = {
+      x: (event.clientX - rect.left - this.view.x) / this.view.scale,
+      y: (event.clientY - rect.top - this.view.y) / this.view.scale,
+    };
+    const { hidden } = this.state.options;
+    const visible = (item: SceneItem) => item.shapes.some((shape) => !hidden.has(shape.paint));
+    return pickItem(this.state.scene, point, PICK_TOLERANCE_PX / this.view.scale, visible);
+  }
+
+  /** An outline of the dragged part at the place it would land. */
+  private drawCarry(ctx: CanvasRenderingContext2D): void {
+    const carry = this.carry;
+    if (!carry || !this.state) return;
+    const ratio = window.devicePixelRatio || 1;
+    const { scale, x, y } = this.view;
+    const { box } = carry.item;
+    ctx.save();
+    ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+    ctx.strokeStyle = this.state.options.selectionColor;
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([5, 4]);
+    ctx.strokeRect(
+      (box.minX + carry.by.x) * scale + x,
+      (box.minY + carry.by.y) * scale + y,
+      (box.maxX - box.minX) * scale,
+      (box.maxY - box.minY) * scale,
+    );
+    ctx.restore();
+  }
+
   private resize(): void {
     const rect = this.canvas.getBoundingClientRect();
     const first = this.width === 0;
@@ -186,5 +247,6 @@ export class CanvasController {
       { width: this.width, height: this.height, pixelRatio: window.devicePixelRatio || 1 },
       this.state.options,
     );
+    this.drawCarry(ctx);
   }
 }

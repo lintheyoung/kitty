@@ -3397,6 +3397,18 @@ export const layerWsRpc = (
               jlcParts.importPart({ path: input.path, lcsc: input.lcsc, workspaceRoot }),
             ),
           ),
+        [WS_METHODS.hardwareSchematicEdit]: (input) =>
+          requireHardwareWorkspace(input).pipe(
+            Effect.flatMap((workspaceRoot) =>
+              kicadService.schematicEdit({ path: input.path, edits: input.edits, workspaceRoot }),
+            ),
+          ),
+        [WS_METHODS.hardwareSchematicHistory]: (input) =>
+          requireHardwareWorkspace(input).pipe(
+            Effect.flatMap((workspaceRoot) =>
+              kicadService.schematicHistory({ path: input.path, step: input.step, workspaceRoot }),
+            ),
+          ),
         [WS_METHODS.hardwareFabExport]: (input) =>
           requireHardwareWorkspace(input).pipe(
             Effect.flatMap((workspaceRoot) =>

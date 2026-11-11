@@ -1,4 +1,4 @@
-import type { Scene, SceneItem } from "@t3tools/shared/kicad/scene";
+import type { Point, Scene, SceneItem } from "@t3tools/shared/kicad/scene";
 import { MaximizeIcon, MinusIcon, PlusIcon } from "lucide-react";
 import { useEffect, useRef } from "react";
 
@@ -24,6 +24,9 @@ export function DesignCanvas(props: {
   readonly reveal?: SceneItem | undefined;
   readonly markers?: ReadonlyArray<Marker> | undefined;
   readonly onPick: (item: SceneItem | undefined) => void;
+  /** Items that can be dragged to a new place, and what to do when one is dropped. */
+  readonly movable?: ((item: SceneItem) => boolean) | undefined;
+  readonly onMove?: ((item: SceneItem, by: Point) => void) | undefined;
   readonly className?: string;
 }) {
   const controller = useRef<CanvasController | null>(null);
@@ -35,7 +38,8 @@ export function DesignCanvas(props: {
       controller.current = null;
     };
   };
-  const { scene, dark, hidden, selectedIds, focus, onPick, reveal, markers } = props;
+  const { scene, dark, hidden, selectedIds, focus, onPick, reveal, markers, movable, onMove } =
+    props;
   // The board always sits on a dark canvas, so its selection outline stays light.
   const lightSurface = scene.kind === "schematic" && !dark;
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- pushes the latest drawing and options into the imperative canvas controller
@@ -43,6 +47,8 @@ export function DesignCanvas(props: {
     controller.current?.update({
       scene,
       onPick,
+      movable,
+      onMove,
       options: {
         color: paletteFor(scene, dark),
         hidden,
@@ -53,7 +59,7 @@ export function DesignCanvas(props: {
         markers,
       },
     });
-  }, [scene, dark, hidden, selectedIds, focus, onPick, lightSurface, markers]);
+  }, [scene, dark, hidden, selectedIds, focus, onPick, lightSurface, markers, movable, onMove]);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- scrolls the imperative canvas to an item chosen outside it
   useEffect(() => {
     if (reveal) controller.current?.reveal(reveal);

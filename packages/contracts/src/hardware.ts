@@ -1,6 +1,7 @@
 import * as Schema from "effect/Schema";
 
 import { ProjectId, ThreadId } from "./baseSchemas.ts";
+import { SchematicEdit, SchematicHistoryStep } from "./schematicEdit.ts";
 
 /** Kitty hardware toolchain checks. See docs/kitty/开发计划.md. */
 export const HardwareCheckId = Schema.Literals([
@@ -485,6 +486,21 @@ export const HardwareDesignInput = Schema.Struct({
   path: Schema.String,
 });
 export type HardwareDesignInput = typeof HardwareDesignInput.Type;
+
+/** Change a design's schematic from the designer. */
+export const HardwareSchematicEditInput = Schema.Struct({
+  ...HardwareWorkspaceTarget,
+  path: Schema.String,
+  edits: Schema.Array(SchematicEdit),
+});
+export type HardwareSchematicEditInput = typeof HardwareSchematicEditInput.Type;
+
+export const HardwareSchematicHistoryInput = Schema.Struct({
+  ...HardwareWorkspaceTarget,
+  path: Schema.String,
+  step: SchematicHistoryStep,
+});
+export type HardwareSchematicHistoryInput = typeof HardwareSchematicHistoryInput.Type;
 
 /** Import one JLC part into a design's library. */
 export const HardwareJlcImportInput = Schema.Struct({

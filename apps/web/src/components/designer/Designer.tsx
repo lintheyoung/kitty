@@ -7,7 +7,11 @@ import {
   ArrowLeftRightIcon,
   LayersIcon,
   PackageSearchIcon,
+  RedoIcon,
   RefreshCwIcon,
+  RotateCcwIcon,
+  Trash2Icon,
+  UndoIcon,
   ShieldCheckIcon,
   XIcon,
 } from "lucide-react";
@@ -19,6 +23,7 @@ import { cn } from "~/lib/utils";
 import { hardwareDesigns, hardwareDesignSource } from "../../state/hardware";
 import { useEnvironmentQuery } from "../../state/query";
 import { Button } from "../ui/button";
+import { Input } from "../ui/input";
 import { BoardModelView } from "./BoardModelView";
 import { DesignCanvas } from "./DesignCanvas";
 import { PartSearch } from "./PartSearch";
@@ -27,6 +32,7 @@ import { boardProblems, countProblems, sheetProblems } from "./problems.ts";
 import { layerLabel, paletteFor, shownByDefault } from "./scenePaint.ts";
 import { type Marker, scenePaints } from "./sceneRenderer.ts";
 import { useDesignChecks, useDesignWatcher } from "./useDesignChecks.ts";
+import { useSchematicEditor } from "./useSchematicEditor.ts";
 
 const MODEL_TAB = "model";
 
@@ -116,6 +122,15 @@ function Properties(props: {
   readonly onShowOther: () => void;
   readonly onPickNet: (net: string) => void;
   readonly onClose: () => void;
+  /** Present when the part can be changed here. */
+  readonly edit?:
+    | {
+        readonly busy: boolean;
+        readonly onRotate: () => void;
+        readonly onDelete: () => void;
+        readonly onValue: (value: string) => void;
+      }
+    | undefined;
 }) {
   const { item } = props;
   const rows: Array<readonly [string, string]> = [
@@ -143,6 +158,47 @@ function Properties(props: {
           <XIcon />
         </Button>
       </div>
+      {props.edit ? (
+        <form
+          key={`${item.id}:${item.value}`}
+          className="flex items-center gap-1 border-b px-2 py-1.5"
+          onSubmit={(event) => {
+            event.preventDefault();
+            const value = new FormData(event.currentTarget).get("value");
+            if (typeof value === "string" && value.trim() !== "" && value !== item.value) {
+              props.edit?.onValue(value.trim());
+            }
+          }}
+        >
+          <Input
+            size="compact"
+            name="value"
+            aria-label="Value"
+            defaultValue={item.value ?? ""}
+            disabled={props.edit.busy}
+          />
+          <Button
+            type="button"
+            size="icon-xs"
+            variant="ghost"
+            aria-label="Rotate"
+            disabled={props.edit.busy}
+            onClick={props.edit.onRotate}
+          >
+            <RotateCcwIcon />
+          </Button>
+          <Button
+            type="button"
+            size="icon-xs"
+            variant="ghost"
+            aria-label="Delete part"
+            disabled={props.edit.busy}
+            onClick={props.edit.onDelete}
+          >
+            <Trash2Icon />
+          </Button>
+        </form>
+      ) : null}
       <div className="min-h-0 overflow-y-auto px-2 py-1.5">
         {rows.map(([name, value]) => (
           <div key={name} className="flex gap-2 py-0.5">
@@ -321,6 +377,42 @@ function DesignerView(props: {
     : undefined;
   const counts = countProblems(problems);
 
+  // Only the root sheet is edited here; parts are real parts, not power symbols.
+  const editable = scene?.kind === "schematic" && current === drawings[0] && !showModel;
+  const editor = useSchematicEditor(
+    { environmentId, threadId, projectId: props.projectId, path: project },
+    () => {
+      loaded.refresh();
+      if (checked) void runChecks();
+    },
+  );
+  const isEditablePart = (item: SceneItem) =>
+    editable && item.kind === "symbol" && item.ref !== undefined && !item.ref.startsWith("#");
+  const selectedPart = selectedItem && isEditablePart(selectedItem) ? selectedItem : undefined;
+  const removeSelected = () => {
+    if (!selectedPart?.ref) return;
+    setSelection(undefined);
+    void editor.apply([{ op: "remove", reference: selectedPart.ref }]);
+  };
+  const rotateSelected = () => {
+    if (!selectedPart?.ref) return;
+    void editor.apply([{ op: "move", reference: selectedPart.ref, rotateBy: 90 }]);
+  };
+  const onKeyDown = (event: React.KeyboardEvent) => {
+    if (!editable || event.target instanceof HTMLInputElement) return;
+    const command = event.metaKey || event.ctrlKey;
+    if (command && event.key.toLowerCase() === "z") {
+      event.preventDefault();
+      void editor.step(event.shiftKey ? "redo" : "undo");
+    } else if (!command && (event.key === "Delete" || event.key === "Backspace")) {
+      event.preventDefault();
+      removeSelected();
+    } else if (!command && event.key.toLowerCase() === "r") {
+      event.preventDefault();
+      rotateSelected();
+    }
+  };
+
   const pick = (item: SceneItem | undefined) => {
     setReveal(undefined);
     if (!item || !scene) return setSelection(undefined);
@@ -411,7 +503,29 @@ function DesignerView(props: {
                   : `${counts.errors} errors · ${counts.warnings} warnings`}
           </Button>
         ) : null}
-        {scene?.kind === "schematic" && !showModel && project ? (
+        {editable ? (
+          <>
+            <Button
+              size="icon-xs"
+              variant="ghost-muted"
+              aria-label="Undo"
+              disabled={editor.busy}
+              onClick={() => void editor.step("undo")}
+            >
+              <UndoIcon />
+            </Button>
+            <Button
+              size="icon-xs"
+              variant="ghost-muted"
+              aria-label="Redo"
+              disabled={editor.busy}
+              onClick={() => void editor.step("redo")}
+            >
+              <RedoIcon />
+            </Button>
+          </>
+        ) : null}
+        {editable && project ? (
           <Button
             size="xs"
             variant={showParts ? "outline" : "ghost-muted"}
@@ -448,7 +562,15 @@ function DesignerView(props: {
           <RefreshCwIcon className={cn(loaded.isPending && "animate-spin")} />
         </Button>
       </div>
-      <div className="relative min-h-0 flex-1">
+      <div
+        className="relative min-h-0 flex-1 outline-none"
+        // Focusable so R, Delete and undo reach the drawing after a click on it.
+        tabIndex={-1}
+        onKeyDown={onKeyDown}
+        onPointerDown={(event) => {
+          if (event.target instanceof HTMLCanvasElement) event.currentTarget.focus();
+        }}
+      >
         {showModel ? (
           <BoardModelView
             className="absolute inset-0"
@@ -468,6 +590,10 @@ function DesignerView(props: {
               reveal={reveal}
               markers={markers}
               onPick={pick}
+              movable={editable ? isEditablePart : undefined}
+              onMove={(item, by) => {
+                if (item.ref) void editor.apply([{ op: "move", reference: item.ref, by }]);
+              }}
             />
             {scene.items.length === 0 ? (
               <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-sm text-muted-foreground">
@@ -489,12 +615,16 @@ function DesignerView(props: {
                 }
               />
             ) : null}
-            {showParts && scene.kind === "schematic" && project ? (
+            {showParts && editable && project ? (
               <PartSearch
                 environmentId={environmentId}
                 threadId={threadId}
                 projectId={props.projectId}
                 path={project}
+                onPlace={async (part) => {
+                  const result = await editor.apply([{ op: "place", symbol: part.symbol }]);
+                  return result !== undefined;
+                }}
               />
             ) : null}
             {showProblems && checked ? (
@@ -533,6 +663,24 @@ function DesignerView(props: {
                 }}
                 onPickNet={(net) => selection && setSelection({ ...selection, net })}
                 onClose={() => setSelection(undefined)}
+                edit={
+                  selectedPart?.ref
+                    ? {
+                        busy: editor.busy,
+                        onRotate: rotateSelected,
+                        onDelete: removeSelected,
+                        onValue: (value) =>
+                          void editor.apply([
+                            {
+                              op: "set",
+                              reference: selectedPart.ref ?? "",
+                              property: "Value",
+                              value,
+                            },
+                          ]),
+                      }
+                    : undefined
+                }
               />
             ) : null}
           </>
@@ -556,6 +704,10 @@ function DesignerView(props: {
         ) : null}
         {checks.error ? (
           <span className="truncate text-destructive-foreground">{checks.error}</span>
+        ) : null}
+        {editor.busy ? <span className="shrink-0">Saving…</span> : null}
+        {editor.message ? (
+          <span className="truncate text-destructive-foreground">{editor.message}</span>
         ) : null}
         {source && source.omitted > 0 ? (
           <span className="shrink-0">{source.omitted} file(s) too large to show</span>

@@ -233,6 +233,8 @@ const RPC_AGGREGATES = {
   [WS_METHODS.hardwareDesignStamp]: "hardware",
   [WS_METHODS.hardwareJlcSearch]: "hardware",
   [WS_METHODS.hardwareJlcImport]: "hardware",
+  [WS_METHODS.hardwareSchematicEdit]: "hardware",
+  [WS_METHODS.hardwareSchematicHistory]: "hardware",
   [WS_METHODS.hardwareTestPlans]: "hardware",
   [WS_METHODS.hardwareTestCreate]: "hardware",
   [WS_METHODS.hardwareTestRun]: "hardware",
