@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { designMention, withMention } from "./designMention.ts";
+import { designMention, withMention, withRequest } from "./designMention.ts";
 
 describe("designMention", () => {
   const file = "hardware/kicad/board.kicad_sch";
@@ -18,5 +18,7 @@ describe("designMention", () => {
     const prompt = withMention("Lower the current. ", mention);
     expect(prompt).toBe(`Lower the current.\nAbout ${mention}: `);
     expect(withMention(prompt, mention)).toBe(prompt);
+    expect(withRequest("Hi. ", "Run the checks.")).toBe("Hi.\nRun the checks.");
+    expect(withRequest("Run the checks.", "Run the checks.")).toBe("Run the checks.");
   });
 });

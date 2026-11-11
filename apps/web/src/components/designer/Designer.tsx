@@ -6,6 +6,8 @@ import { diffScenes, type SceneDiff } from "@t3tools/shared/kicad/sceneDiff";
 import { buildSchematicScene } from "@t3tools/shared/kicad/schematicScene";
 import {
   ArrowLeftRightIcon,
+  CheckIcon,
+  ChevronRightIcon,
   LayersIcon,
   MessageSquareIcon,
   PackageSearchIcon,
@@ -17,6 +19,7 @@ import {
   Trash2Icon,
   UndoIcon,
   ShieldCheckIcon,
+  SparklesIcon,
   XIcon,
 } from "lucide-react";
 import { useState } from "react";
@@ -31,7 +34,8 @@ import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { BoardModelView } from "./BoardModelView";
 import { DesignCanvas } from "./DesignCanvas";
-import { designMention, withMention } from "./designMention.ts";
+import { designMention, withMention, withRequest } from "./designMention.ts";
+import { currentStep, type DesignStep, designSteps } from "./designSteps.ts";
 import { PartSearch } from "./PartSearch";
 import { ProblemList } from "./ProblemList";
 import { boardProblems, countProblems, sheetProblems } from "./problems.ts";
@@ -344,6 +348,55 @@ function Properties(props: {
   );
 }
 
+/** The way from an idea to an ordered board, with the step the design is at marked. */
+function StepBar(props: {
+  readonly steps: ReadonlyArray<DesignStep>;
+  readonly onOpen: (step: DesignStep) => void;
+  /** Hands the step to the agent by writing the request into the chat box. */
+  readonly onAsk: (step: DesignStep) => void;
+}) {
+  const current = currentStep(props.steps);
+  return (
+    <div className="flex shrink-0 items-center gap-0.5 overflow-x-auto border-b px-2 py-1 text-xs">
+      {props.steps.map((step, index) => (
+        <div key={step.id} className="flex shrink-0 items-center gap-0.5">
+          {index > 0 ? <ChevronRightIcon className="size-3 text-muted-foreground" /> : null}
+          <button
+            type="button"
+            className={cn(
+              "flex items-center gap-1 rounded px-1.5 py-0.5 hover:bg-accent",
+              step === current ? "bg-accent font-medium" : "text-muted-foreground",
+            )}
+            onClick={() => props.onOpen(step)}
+          >
+            {step.done ? <CheckIcon className="size-3 text-success-foreground" /> : null}
+            {step.label}
+            {step === current ? (
+              <span className="font-normal text-muted-foreground">· {step.status}</span>
+            ) : null}
+          </button>
+        </div>
+      ))}
+      <div className="min-w-2 flex-1" />
+      {current?.prompt ? (
+        <Button
+          size="xs"
+          variant="outline"
+          className="shrink-0"
+          onClick={() => props.onAsk(current)}
+        >
+          <SparklesIcon />
+          Let Kitty do this
+        </Button>
+      ) : current ? (
+        <span className="shrink-0 text-muted-foreground">
+          Kitty cannot do {current.label.toLowerCase()} yet. Use KiCad for this step.
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
 const REVIEW_LINES = 5;
 
 /** The agent's changes, marked on the drawing, for the user to keep or take back. */
@@ -619,6 +672,41 @@ function DesignerView(props: {
     store.setPrompt(props.threadRef, withMention(prompt, mention));
   };
 
+  const count = (kind: Scene["kind"], test: (item: SceneItem) => boolean) =>
+    drawings
+      .filter((drawing) => drawing.scene?.kind === kind)
+      .reduce((total, drawing) => total + (drawing.scene?.items.filter(test).length ?? 0), 0);
+  const steps = designSteps(
+    {
+      parts: count("schematic", (item) => item.kind === "symbol" && !item.ref?.startsWith("#")),
+      footprints: count("board", (item) => item.kind === "footprint"),
+      tracks: count("board", (item) => item.kind === "track"),
+      unrouted: checks.drc?.unconnected.length,
+      errors: checked
+        ? (checks.erc?.summary.errors ?? 0) + (checks.drc?.summary.errors ?? 0)
+        : undefined,
+    },
+    project ?? "this design",
+  );
+  const openStep = (step: DesignStep) => {
+    const kind = step.id === "schematic" ? "schematic" : "board";
+    if (step.id === "checks") {
+      if (!checked) void runChecks();
+      setShowProblems(true);
+      setShowLayers(false);
+      setShowParts(false);
+    } else if (step.id === "schematic" || step.id === "placement" || step.id === "routing") {
+      const drawing = drawings.find((candidate) => candidate.scene?.kind === kind);
+      if (drawing) setTab(drawing.key);
+    }
+  };
+  const askStep = (step: DesignStep) => {
+    if (!step.prompt) return;
+    const store = useComposerDraftStore.getState();
+    const prompt = store.getComposerDraft(props.threadRef)?.prompt ?? "";
+    store.setPrompt(props.threadRef, withRequest(prompt, step.prompt));
+  };
+
   const pick = (item: SceneItem | undefined) => {
     setReveal(undefined);
     if (!item || !scene) return setSelection(undefined);
@@ -644,6 +732,7 @@ function DesignerView(props: {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
+      <StepBar steps={steps} onOpen={openStep} onAsk={askStep} />
       <div className="flex shrink-0 items-center gap-1 border-b px-2 py-1">
         {drawings.map((drawing) => (
           <Button

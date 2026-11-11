@@ -20,3 +20,10 @@ export function withMention(prompt: string, mention: string): string {
   const before = prompt.trimEnd();
   return `${before}${before === "" ? "" : "\n"}About ${mention}: `;
 }
+
+/** The prompt with a request on a line of its own; unchanged when it is already there. */
+export function withRequest(prompt: string, request: string): string {
+  if (prompt.includes(request)) return prompt;
+  const before = prompt.trimEnd();
+  return `${before}${before === "" ? "" : "\n"}${request}`;
+}
