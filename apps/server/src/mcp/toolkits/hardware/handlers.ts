@@ -140,7 +140,9 @@ export const layer = McpToolAccess.toLayer(HardwareToolkit, {
   jlc_part_search: McpToolAccess.actsAsCaller((input) =>
     Effect.gen(function* () {
       const jlc = yield* JlcPartsService.JlcPartsService;
-      return yield* jlc.search(input);
+      const found = yield* jlc.search(input);
+      // Photo links are long, short-lived and of no use to the agent.
+      return { ...found, parts: found.parts.map(({ image: _image, ...part }) => part) };
     }),
   ),
   jlc_part_import: McpToolAccess.actsAsCaller((input) =>

@@ -18,6 +18,9 @@ export const JlcPart = Schema.Struct({
   stock: Schema.Int,
   /** USD per piece at the smallest quantity. */
   unitPrice: Schema.optional(Schema.Number),
+  /** A small photo of the part. The link only works for a short while. */
+  image: Schema.optional(Schema.String),
+  datasheet: Schema.optional(Schema.String),
 });
 export type JlcPart = typeof JlcPart.Type;
 

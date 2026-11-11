@@ -240,14 +240,20 @@ export const make = Effect.fn("KicadService.make")(function* () {
   const confine = (workspaceRoot: string, requested: string) =>
     resolveInWorkspace(workspaceRoot, requested).pipe(Effect.provideService(Path.Path, path));
 
+  // Asking kicad-cli for its version takes a moment, so a CLI that answered is remembered.
+  let knownCli: string | undefined;
   const findCli = Effect.fn("KicadService.findCli")(function* () {
+    if (knownCli) return knownCli;
     const env = yield* HostProcess.Environment;
     for (const command of kicadCliCandidates(env)) {
       const result = yield* processRunner
         .run({ command, args: ["version"], timeout: "15 seconds" })
         .pipe(Effect.option);
       if (Option.isSome(result) && result.value.code === 0) {
-        if (parseKicadCliVersion(result.value.stdout)) return command;
+        if (parseKicadCliVersion(result.value.stdout)) {
+          knownCli = command;
+          return command;
+        }
       }
     }
     return yield* failure(
@@ -1132,11 +1138,17 @@ export const make = Effect.fn("KicadService.make")(function* () {
     return new Map(symbols.map((symbol) => [String(symbol[1]).slice(1, -1), symbol] as const));
   });
 
+  // KiCad's power library is large and does not change while the server runs.
+  let knownPower: Map<string, ReadonlyArray<Node>> | undefined;
   const powerSymbols = Effect.fn("KicadService.powerSymbols")(function* () {
+    if (knownPower) return knownPower;
     const env = yield* HostProcess.Environment;
     for (const directory of kicadSymbolDirectories(yield* findCli(), env)) {
       const symbols = yield* readSymbols(path.join(directory, "power.kicad_sym"));
-      if (symbols.size > 0) return symbols;
+      if (symbols.size > 0) {
+        knownPower = symbols;
+        return symbols;
+      }
     }
     return new Map<string, ReadonlyArray<Node>>();
   });
@@ -1291,12 +1303,15 @@ export const make = Effect.fn("KicadService.make")(function* () {
           : failure("command_failed", `The schematic could not be edited: ${String(cause)}`),
     });
 
-    const cli = yield* findCli();
+    const author = input.by ?? "agent";
     const io = <A, E extends { readonly message: string }, R>(effect: Effect.Effect<A, E, R>) =>
       effect.pipe(Effect.mapError((cause) => failure("command_failed", cause.message)));
-    // KiCad reads the result in a scratch copy of the project before the real file changes.
-    const checked = yield* Effect.scoped(
+    // KiCad reads the agent's result in a scratch copy of the project before the real file
+    // changes. Edits by hand are saved at once, so the drawing answers right away; the
+    // designer's Check runs KiCad on them.
+    const verify = Effect.scoped(
       Effect.gen(function* () {
+        const cli = yield* findCli();
         const temp = yield* io(fs.makeTempDirectoryScoped({ prefix: "kitty-sch-" }));
         const candidate = path.join(temp, `${stem}.kicad_sch`);
         yield* io(fs.writeFileString(candidate, edited.source));
@@ -1337,13 +1352,13 @@ export const make = Effect.fn("KicadService.make")(function* () {
         };
       }),
     );
+    const checked = author === "agent" ? yield* verify : undefined;
     yield* io(fs.writeFileString(file, edited.source));
     const history = historyOf(file, before);
     history.undo.push({ source: before, summary: edited.summary });
     if (history.undo.length > HISTORY_LIMIT) history.undo.shift();
     history.redo.length = 0;
     history.current = edited.source;
-    const author = input.by ?? "agent";
     const review = reviews.get(file);
     if (author === "agent") {
       // Edits in a row are reviewed together, against the file before the first of them.
@@ -1364,9 +1379,9 @@ export const make = Effect.fn("KicadService.make")(function* () {
 
     const warnings: Array<string> = [];
     const parts = edited.placed.map((part) => {
-      const pins = componentPins(checked.netlist, part.reference);
+      const pins = checked ? componentPins(checked.netlist, part.reference) : [];
       // Power symbols and flags are not parts, so the netlist does not list them.
-      const wantedNets = part.reference.startsWith("#") ? {} : part.nets;
+      const wantedNets = part.reference.startsWith("#") || !checked ? {} : part.nets;
       for (const [number, wanted] of Object.entries(wantedNets)) {
         const actual = pins.find((pin) => pin.pin === number)?.net;
         if (wanted.trim() !== "" && actual !== wanted && actual !== `/${wanted}`) {
@@ -1391,7 +1406,11 @@ export const make = Effect.fn("KicadService.make")(function* () {
       parts,
       removed: edited.removed,
       warnings,
-      erc: { errors: checked.erc.summary.errors, warnings: checked.erc.summary.warnings },
+      erc: {
+        errors: checked?.erc.summary.errors ?? 0,
+        warnings: checked?.erc.summary.warnings ?? 0,
+      },
+      checked: checked !== undefined,
       userChanges,
     } satisfies SchematicEditResult;
   });

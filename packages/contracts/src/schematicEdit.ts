@@ -171,6 +171,8 @@ export const SchematicEditResult = Schema.Struct({
   warnings: Schema.Array(Schema.String),
   /** KiCad's electrical check of the result. Use kicad_erc for the details. */
   erc: Schema.Struct({ errors: Schema.Int, warnings: Schema.Int }),
+  /** False for an edit made by hand, which is saved without running KiCad on it. */
+  checked: Schema.Boolean,
   /** What the user changed by hand in the designer since the agent last edited this schematic. */
   userChanges: Schema.Array(Schema.String),
 });

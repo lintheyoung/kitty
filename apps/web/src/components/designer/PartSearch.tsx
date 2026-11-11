@@ -31,6 +31,25 @@ function formatStock(stock: number): string {
   return `${stock} in stock`;
 }
 
+/** JLC's photo of a part; an empty tile when there is none or it does not load. */
+function PartPhoto(props: { readonly src: string | undefined }) {
+  const [failed, setFailed] = useState(false);
+  return (
+    <div className="size-12 shrink-0 overflow-hidden rounded border bg-white">
+      {props.src && !failed ? (
+        <img
+          src={props.src}
+          alt=""
+          loading="lazy"
+          referrerPolicy="no-referrer"
+          className="size-full object-contain"
+          onError={() => setFailed(true)}
+        />
+      ) : null}
+    </div>
+  );
+}
+
 interface SearchState {
   readonly busy: boolean;
   readonly parts?: ReadonlyArray<JlcPart>;
@@ -150,6 +169,7 @@ export function PartSearch(props: {
           const imported = added[part.lcsc];
           return (
             <div key={part.lcsc} className="flex gap-2 rounded px-1.5 py-1.5 hover:bg-accent">
+              <PartPhoto key={part.image} src={part.image} />
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-1.5">
                   <span className="truncate font-medium">{part.mpn || part.lcsc}</span>
@@ -164,6 +184,19 @@ export function PartSearch(props: {
                 <div className="text-muted-foreground">
                   {formatStock(part.stock)}
                   {part.unitPrice !== undefined ? ` · $${part.unitPrice.toFixed(4)}` : ""}
+                  {part.datasheet ? (
+                    <>
+                      {" · "}
+                      <a
+                        className="underline hover:text-foreground"
+                        href={part.datasheet}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        Datasheet
+                      </a>
+                    </>
+                  ) : null}
                 </div>
                 {imported ? (
                   <div className="text-success-foreground">Placed on the sheet</div>

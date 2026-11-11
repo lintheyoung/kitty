@@ -41,6 +41,9 @@ it("ranks parts in stock first, then basic, preferred and extended", () => {
             firstSortName: "Resistors",
             secondSortName: "Chip Resistor",
             componentPrices: [{ productPrice: 0.0012 }],
+            minImageAccessIdUrl: "https://img.example/c4.jpg?sig=1",
+            dataManualUrl: "https://www.lcsc.com/datasheet/c4.pdf",
+            productBigImageAccessIdUrl: "javascript:alert(1)",
           }),
           row("C5", "base", 500),
           { componentCode: "none" },
@@ -69,6 +72,8 @@ it("ranks parts in stock first, then basic, preferred and extended", () => {
     manufacturer: "UNI-ROYAL",
     category: "Chip Resistor / Resistors",
     unitPrice: 0.0012,
+    image: "https://img.example/c4.jpg?sig=1",
+    datasheet: "https://www.lcsc.com/datasheet/c4.pdf",
   });
 });
 

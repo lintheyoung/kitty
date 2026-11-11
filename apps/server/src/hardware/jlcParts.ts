@@ -52,6 +52,9 @@ export function jlcSearchBody(query: string, basicOnly: boolean, limit: number) 
 const record = (value: unknown): Record<string, unknown> =>
   typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
 const string = (value: unknown): string => (typeof value === "string" ? value : "");
+/** A web address from the catalogue, only if it is a plain https one. */
+const link = (value: unknown): string =>
+  typeof value === "string" && value.startsWith("https://") ? value : "";
 const integer = (value: unknown): number =>
   typeof value === "number" && Number.isFinite(value) ? Math.trunc(value) : 0;
 
@@ -75,6 +78,8 @@ function toPart(raw: unknown): JlcPart | undefined {
   const category = [string(row.secondSortName), string(row.firstSortName)]
     .filter(Boolean)
     .join(" / ");
+  const image = link(row.minImageAccessIdUrl) || link(row.productBigImageAccessIdUrl);
+  const datasheet = link(row.dataManualUrl);
   return {
     lcsc,
     mpn: string(row.componentModelEn),
@@ -85,6 +90,8 @@ function toPart(raw: unknown): JlcPart | undefined {
     ...(manufacturer ? { manufacturer } : {}),
     ...(category ? { category } : {}),
     ...(typeof price === "number" ? { unitPrice: price } : {}),
+    ...(image ? { image } : {}),
+    ...(datasheet ? { datasheet } : {}),
   };
 }
 
