@@ -54,6 +54,8 @@ export type SchematicEdit =
       readonly mirror?: Mirror | undefined;
     }
   | { readonly op: "remove"; readonly reference: string }
+  /** Removes a wire, label, junction or no-connect mark by its id. */
+  | { readonly op: "erase"; readonly id: string }
   | {
       readonly op: "set";
       readonly reference: string;
@@ -83,6 +85,8 @@ export interface EditResult {
   /** Parts placed or moved by these edits. */
   readonly placed: ReadonlyArray<PlacedPart>;
   readonly removed: ReadonlyArray<string>;
+  /** What each edit did, in plain words, for the design's change log. */
+  readonly summary: ReadonlyArray<string>;
 }
 
 /** An edit that cannot be applied; the message says what to do instead. */
@@ -566,8 +570,6 @@ function occupied(session: Session): ReadonlyArray<Box> {
  */
 function detach(session: Session, pins: ReadonlyArray<Pin>): Record<string, string> {
   const nets: Record<string, string> = {};
-  const ends = (wire: List) =>
-    all(find(wire, "pts") ?? [], "xy").map((point) => ({ x: num(point[1]), y: num(point[2]) }));
   for (const pin of pins) {
     for (const marker of all(session.root, "no_connect")) {
       if (same(positionOf(marker), pin.at)) removeNode(session, marker);
@@ -682,6 +684,71 @@ function move(
   placed.push({ reference, symbol: libId, at, rotation, nets });
 }
 
+const ERASABLE = new Set(["wire", "label", "global_label", "junction", "no_connect"]);
+const ERASED_NAME: Readonly<Record<string, string>> = {
+  wire: "a wire",
+  label: "a label",
+  global_label: "a label",
+  junction: "a junction",
+  no_connect: "a no-connect mark",
+};
+
+const ends = (wire: List) =>
+  all(find(wire, "pts") ?? [], "xy").map((point) => ({ x: num(point[1]), y: num(point[2]) }));
+
+/** True when `point` lies on a wire between its ends. */
+function insideWire(point: Point, wire: List): boolean {
+  const [a, b] = ends(wire);
+  if (!a || !b || same(point, a) || same(point, b)) return false;
+  const cross = (b.x - a.x) * (point.y - a.y) - (b.y - a.y) * (point.x - a.x);
+  if (Math.abs(cross) > 1e-3) return false;
+  const along = (point.x - a.x) * (b.x - a.x) + (point.y - a.y) * (b.y - a.y);
+  return along > 0 && along < (b.x - a.x) ** 2 + (b.y - a.y) ** 2;
+}
+
+/** A wire that ends in the middle of another one only connects through a junction. */
+function joinWire(session: Session, point: Point, before: ReadonlyArray<List>): void {
+  if (!before.some((wire) => insideWire(point, wire))) return;
+  if (all(session.root, "junction").some((junction) => same(positionOf(junction), point))) return;
+  insert(session, [
+    "junction",
+    ["at", numeric(point.x), numeric(point.y)],
+    ["diameter", "0"],
+    ["color", "0", "0", "0", "0"],
+    ["uuid", quoted(session.context.uuid())],
+  ]);
+}
+
+/** A point in words: the pin that sits there, or its coordinates. */
+function describePoint(session: Session, point: Point): string {
+  for (const part of sheetSymbols(session.root)) {
+    const reference = referenceOf(part);
+    if (reference.startsWith("#")) continue;
+    const pin = pinsOfPart(session, part).find((candidate) => same(candidate.at, point));
+    if (pin) {
+      // Passives name their pins by number, which adds nothing.
+      const named = pin.name !== "" && pin.name !== "~" && pin.name !== pin.number;
+      return `${reference} pin ${pin.number}${named ? ` (${pin.name})` : ""}`;
+    }
+  }
+  return `(${numeric(point.x)}, ${numeric(point.y)})`;
+}
+
+function describeNets(
+  reference: string,
+  nets: Readonly<Record<string, string>>,
+  noConnect: ReadonlyArray<string>,
+): ReadonlyArray<string> {
+  return [
+    ...Object.entries(nets).map(([pin, net]) =>
+      net.trim() === ""
+        ? `Disconnected ${reference} pin ${pin}`
+        : `Connected ${reference} pin ${pin} to ${net.trim()}`,
+    ),
+    ...noConnect.map((pin) => `Marked ${reference} pin ${pin} as not connected`),
+  ];
+}
+
 function setProperty(session: Session, edit: Extract<SchematicEdit, { op: "set" }>): void {
   const part = findPart(session, edit.reference);
   const name = edit.property.trim();
@@ -751,18 +818,55 @@ export function applySchematicEdits(
   };
   const placed: Array<PlacedPart> = [];
   const removed: Array<string> = [];
+  const summary: Array<string> = [];
   for (const edit of edits) {
     switch (edit.op) {
-      case "place":
+      case "place": {
         place(session, edit, placed);
+        const part = placed.at(-1);
+        const nets = Object.entries(edit.nets ?? {})
+          .filter(([, net]) => net.trim() !== "")
+          .map(([pin, net]) => `${pin}=${net.trim()}`);
+        summary.push(
+          `Placed ${part?.reference} (${edit.symbol}${edit.value ? `, ${edit.value}` : ""})${
+            nets.length > 0 ? ` with pins ${nets.join(", ")}` : ""
+          }`,
+        );
         break;
+      }
+      case "erase": {
+        const node = session.root.find(
+          (entry): entry is List =>
+            ERASABLE.has(head(entry)) && text(find(entry as List, "uuid")?.[1]) === edit.id,
+        );
+        if (!node) throw refuse("That item is no longer on the sheet.");
+        const where = head(node) === "wire" ? ends(node)[0] : positionOf(node);
+        removeNode(session, node);
+        summary.push(
+          `Removed ${ERASED_NAME[head(node)]}${
+            head(node).endsWith("label") ? ` ${text(node[1])}` : ""
+          } at ${describePoint(session, where ?? { x: 0, y: 0 })}`,
+        );
+        break;
+      }
       case "wire":
         if (edit.points.length < 2) throw refuse("A wire needs two points or more.");
-        addWire(session, edit.points);
+        {
+          const before = all(session.root, "wire");
+          const first = edit.points[0] as Point;
+          const last = edit.points.at(-1) as Point;
+          addWire(session, edit.points);
+          joinWire(session, first, before);
+          joinWire(session, last, before);
+          summary.push(
+            `Drew a wire from ${describePoint(session, first)} to ${describePoint(session, last)}`,
+          );
+        }
         break;
       case "label":
         if (edit.net.trim() === "") throw refuse("A label needs a net name.");
         addLabel(session, edit.net.trim(), edit.at, edit.rotation ?? 0);
+        summary.push(`Added the label ${edit.net.trim()} at ${describePoint(session, edit.at)}`);
         break;
       case "junction":
         insert(session, [
@@ -772,6 +876,7 @@ export function applySchematicEdits(
           ["color", "0", "0", "0", "0"],
           ["uuid", quoted(context.uuid())],
         ]);
+        summary.push(`Added a junction at ${describePoint(session, edit.at)}`);
         break;
       case "no_connect":
         insert(session, [
@@ -779,10 +884,20 @@ export function applySchematicEdits(
           ["at", numeric(edit.at.x), numeric(edit.at.y)],
           ["uuid", quoted(context.uuid())],
         ]);
+        summary.push(`Marked ${describePoint(session, edit.at)} as not connected`);
         break;
-      case "move":
+      case "move": {
         move(session, edit, placed);
+        const part = placed.at(-1);
+        const turned = edit.rotateBy !== undefined || edit.rotation !== undefined;
+        const slid = edit.at !== undefined || edit.by !== undefined;
+        summary.push(
+          `${slid ? "Moved" : "Turned"} ${part?.reference}${
+            slid ? ` to (${numeric(part?.at.x ?? 0)}, ${numeric(part?.at.y ?? 0)})` : ""
+          }${turned ? `${slid ? ", turned" : ""} to ${part?.rotation} degrees` : ""}`,
+        );
         break;
+      }
       case "connect": {
         const part = findPart(session, edit.reference);
         const pins = pinsOfPart(session, part);
@@ -794,6 +909,7 @@ export function applySchematicEdits(
           pins.filter((pin) => changed.has(pin.number)),
         );
         connectPins(session, pins, referenceOf(part), nets, edit.noConnect ?? []);
+        summary.push(...describeNets(referenceOf(part), nets, edit.noConnect ?? []));
         placed.push({
           reference: referenceOf(part),
           symbol: text(find(part, "lib_id")?.[1]),
@@ -808,12 +924,14 @@ export function applySchematicEdits(
         detach(session, pinsOfPart(session, part));
         removeNode(session, part);
         removed.push(referenceOf(part));
+        summary.push(`Removed ${referenceOf(part)} (${text(propertyOf(part, "Value")?.[2])})`);
         break;
       }
       case "set":
         setProperty(session, edit);
+        summary.push(`Set ${edit.reference} ${edit.property.trim()} to ${edit.value}`);
         break;
     }
   }
-  return { source: printDoc(root), placed, removed };
+  return { source: printDoc(root), placed, removed, summary };
 }

@@ -344,6 +344,33 @@ it.effect("edits a schematic, reports what KiCad resolved, and undoes it", () =>
         yield* service.schematicHistory({ ...target, step: "redo" });
         assert.equal(yield* fs.readFileString(file), saved);
 
+        // Everything is in the change log, and the agent hears what the user did by hand.
+        yield* service.schematicEdit({
+          ...target,
+          by: "user",
+          edits: [{ op: "set", reference: "R1", property: "Value", value: "47k" }],
+        });
+        const log = yield* service.schematicChanges(target);
+        assert.deepStrictEqual(
+          log.changes.map((change) => [change.by, change.summary[0]]),
+          [
+            ["agent", "Placed R1 (jlc:R, 10k) with pins 1=+3V3, 2=EN"],
+            ["user", "Undid: Placed R1 (jlc:R, 10k) with pins 1=+3V3, 2=EN"],
+            ["user", "Redid: Placed R1 (jlc:R, 10k) with pins 1=+3V3, 2=EN"],
+            ["user", "Set R1 Value to 47k"],
+          ],
+        );
+        const next = yield* service.schematicEdit({
+          ...target,
+          edits: [{ op: "set", reference: "R1", property: "Value", value: "22k" }],
+        });
+        assert.deepStrictEqual(next.userChanges, [
+          "Undid: Placed R1 (jlc:R, 10k) with pins 1=+3V3, 2=EN",
+          "Redid: Placed R1 (jlc:R, 10k) with pins 1=+3V3, 2=EN",
+          "Set R1 Value to 47k",
+        ]);
+        assert.deepStrictEqual((yield* service.schematicChanges(target)).userChanges, []);
+
         // A save from somewhere else starts the history over.
         yield* fs.writeFileString(file, EDIT_SHEET);
         const stale = yield* service.schematicHistory({ ...target, step: "undo" });

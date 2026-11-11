@@ -7,6 +7,8 @@ import {
   ArrowLeftRightIcon,
   LayersIcon,
   PackageSearchIcon,
+  PencilIcon,
+  PencilLineIcon,
   RedoIcon,
   RefreshCwIcon,
   RotateCcwIcon,
@@ -116,12 +118,18 @@ const KIND_LABEL: Readonly<Record<SceneItem["kind"], string>> = {
   zone: "Copper zone",
 };
 
+/** A net's name as the user would type it; nets KiCad named by itself have none. */
+const namedNet = (net: string | undefined) =>
+  !net || net.startsWith("Net-(") || net.startsWith("unconnected-") ? "" : displayNet(net);
+
 function Properties(props: {
   readonly item: SceneItem;
   readonly otherName: string | undefined;
   readonly onShowOther: () => void;
   readonly onPickNet: (net: string) => void;
   readonly onClose: () => void;
+  /** Present when the item is a wire, label or mark that can be removed. */
+  readonly onErase?: (() => void) | undefined;
   /** Present when the part can be changed here. */
   readonly edit?:
     | {
@@ -129,10 +137,15 @@ function Properties(props: {
         readonly onRotate: () => void;
         readonly onDelete: () => void;
         readonly onValue: (value: string) => void;
+        /** Puts a pin on a net; an empty name disconnects it, null marks it unused. */
+        readonly onPinNet: (pin: string, net: string | null) => void;
       }
     | undefined;
 }) {
   const { item } = props;
+  const [editing, setEditing] = useState<{ item: string; pin: string } | undefined>();
+  // The pin being edited belongs to one part; picking another part closes it.
+  const editingPin = editing?.item === item.id ? editing.pin : undefined;
   const rows: Array<readonly [string, string]> = [
     ...(item.value && item.value !== item.title ? [["Value", item.value] as const] : []),
     ...(item.net ? [["Net", displayNet(item.net)] as const] : []),
@@ -152,6 +165,11 @@ function Properties(props: {
           <Button size="xs" variant="outline" onClick={props.onShowOther}>
             <ArrowLeftRightIcon />
             {props.otherName}
+          </Button>
+        ) : null}
+        {props.onErase ? (
+          <Button size="icon-xs" variant="ghost" aria-label="Delete" onClick={props.onErase}>
+            <Trash2Icon />
           </Button>
         ) : null}
         <Button size="icon-xs" variant="ghost" aria-label="Clear selection" onClick={props.onClose}>
@@ -209,21 +227,75 @@ function Properties(props: {
         {item.pins && item.pins.length > 0 && !item.ref?.startsWith("#") ? (
           <div className="mt-1 border-t pt-1">
             <div className="mb-0.5 text-muted-foreground">Pins</div>
-            {item.pins.map((pin) => (
-              <button
-                key={`${pin.number}:${pin.name}`}
-                type="button"
-                disabled={!pin.net}
-                className="flex w-full gap-2 rounded px-1 py-0.5 text-left enabled:hover:bg-accent"
-                onClick={() => pin.net && props.onPickNet(pin.net)}
-              >
-                <span className="w-8 shrink-0 font-mono">{pin.number}</span>
-                <span className="w-16 shrink-0 truncate text-muted-foreground">
-                  {pin.name === "~" ? "" : pin.name}
-                </span>
-                <span className="min-w-0 truncate">{pin.net ? displayNet(pin.net) : "none"}</span>
-              </button>
-            ))}
+            {item.pins.map((pin) =>
+              props.edit && editingPin === pin.number ? (
+                <form
+                  key={`${pin.number}:${pin.name}`}
+                  className="flex items-center gap-1 py-0.5"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    const net = new FormData(event.currentTarget).get("net");
+                    props.edit?.onPinNet(pin.number, typeof net === "string" ? net.trim() : "");
+                    setEditing(undefined);
+                  }}
+                >
+                  <span className="w-8 shrink-0 px-1 font-mono">{pin.number}</span>
+                  <Input
+                    size="compact"
+                    name="net"
+                    autoFocus
+                    aria-label={`Net for pin ${pin.number}`}
+                    placeholder="Net name, e.g. SDA"
+                    defaultValue={namedNet(pin.net)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Escape") setEditing(undefined);
+                    }}
+                  />
+                  <Button type="submit" size="xs" variant="outline">
+                    Set
+                  </Button>
+                  <Button
+                    type="button"
+                    size="xs"
+                    variant="ghost"
+                    onClick={() => {
+                      props.edit?.onPinNet(pin.number, null);
+                      setEditing(undefined);
+                    }}
+                  >
+                    Unused
+                  </Button>
+                </form>
+              ) : (
+                <div key={`${pin.number}:${pin.name}`} className="flex items-center">
+                  <button
+                    type="button"
+                    disabled={!pin.net}
+                    className="flex min-w-0 flex-1 gap-2 rounded px-1 py-0.5 text-left enabled:hover:bg-accent"
+                    onClick={() => pin.net && props.onPickNet(pin.net)}
+                  >
+                    <span className="w-8 shrink-0 font-mono">{pin.number}</span>
+                    <span className="w-16 shrink-0 truncate text-muted-foreground">
+                      {pin.name === "~" ? "" : pin.name}
+                    </span>
+                    <span className="min-w-0 truncate">
+                      {pin.net ? displayNet(pin.net) : "none"}
+                    </span>
+                  </button>
+                  {props.edit ? (
+                    <Button
+                      size="icon-xs"
+                      variant="ghost"
+                      aria-label={`Change the net of pin ${pin.number}`}
+                      disabled={props.edit.busy}
+                      onClick={() => setEditing({ item: item.id, pin: pin.number })}
+                    >
+                      <PencilIcon />
+                    </Button>
+                  ) : null}
+                </div>
+              ),
+            )}
           </div>
         ) : null}
       </div>
@@ -297,6 +369,7 @@ function DesignerView(props: {
   const [showLayers, setShowLayers] = useState(false);
   const [showProblems, setShowProblems] = useState(false);
   const [showParts, setShowParts] = useState(false);
+  const [wiring, setWiring] = useState(false);
   const [activeProblem, setActiveProblem] = useState<string | undefined>();
 
   const loaded = useEnvironmentQuery(
@@ -389,10 +462,22 @@ function DesignerView(props: {
   const isEditablePart = (item: SceneItem) =>
     editable && item.kind === "symbol" && item.ref !== undefined && !item.ref.startsWith("#");
   const selectedPart = selectedItem && isEditablePart(selectedItem) ? selectedItem : undefined;
+  // Wires, labels and marks are removed by their KiCad id; ids made up here are not real.
+  const erasable =
+    editable &&
+    selectedItem &&
+    ["wire", "label", "junction", "no-connect"].includes(selectedItem.kind) &&
+    /^[0-9a-f-]{36}$/i.test(selectedItem.id)
+      ? selectedItem
+      : undefined;
   const removeSelected = () => {
-    if (!selectedPart?.ref) return;
-    setSelection(undefined);
-    void editor.apply([{ op: "remove", reference: selectedPart.ref }]);
+    if (selectedPart?.ref) {
+      setSelection(undefined);
+      void editor.apply([{ op: "remove", reference: selectedPart.ref }]);
+    } else if (erasable) {
+      setSelection(undefined);
+      void editor.apply([{ op: "erase", id: erasable.id }]);
+    }
   };
   const rotateSelected = () => {
     if (!selectedPart?.ref) return;
@@ -410,6 +495,11 @@ function DesignerView(props: {
     } else if (!command && event.key.toLowerCase() === "r") {
       event.preventDefault();
       rotateSelected();
+    } else if (!command && event.key.toLowerCase() === "w") {
+      event.preventDefault();
+      setWiring((on) => !on);
+    } else if (event.key === "Escape") {
+      setWiring(false);
     }
   };
 
@@ -525,6 +615,16 @@ function DesignerView(props: {
             </Button>
           </>
         ) : null}
+        {editable ? (
+          <Button
+            size="xs"
+            variant={wiring ? "outline" : "ghost-muted"}
+            onClick={() => setWiring((on) => !on)}
+          >
+            <PencilLineIcon />
+            Wire
+          </Button>
+        ) : null}
         {editable && project ? (
           <Button
             size="xs"
@@ -590,6 +690,11 @@ function DesignerView(props: {
               reveal={reveal}
               markers={markers}
               onPick={pick}
+              onWire={
+                editable && wiring
+                  ? (points) => void editor.apply([{ op: "wire", points: [...points] }])
+                  : undefined
+              }
               movable={editable ? isEditablePart : undefined}
               onMove={(item, by) => {
                 if (item.ref) void editor.apply([{ op: "move", reference: item.ref, by }]);
@@ -663,12 +768,21 @@ function DesignerView(props: {
                 }}
                 onPickNet={(net) => selection && setSelection({ ...selection, net })}
                 onClose={() => setSelection(undefined)}
+                onErase={erasable ? removeSelected : undefined}
                 edit={
                   selectedPart?.ref
                     ? {
                         busy: editor.busy,
                         onRotate: rotateSelected,
                         onDelete: removeSelected,
+                        onPinNet: (pin, net) =>
+                          void editor.apply([
+                            {
+                              op: "connect",
+                              reference: selectedPart.ref ?? "",
+                              ...(net === null ? { noConnect: [pin] } : { nets: { [pin]: net } }),
+                            },
+                          ]),
                         onValue: (value) =>
                           void editor.apply([
                             {
@@ -706,6 +820,11 @@ function DesignerView(props: {
           <span className="truncate text-destructive-foreground">{checks.error}</span>
         ) : null}
         {editor.busy ? <span className="shrink-0">Saving…</span> : null}
+        {editable && wiring ? (
+          <span className="shrink-0">
+            Click a pin to start a wire, click to add corners, click a pin to finish. Esc to stop.
+          </span>
+        ) : null}
         {editor.message ? (
           <span className="truncate text-destructive-foreground">{editor.message}</span>
         ) : null}

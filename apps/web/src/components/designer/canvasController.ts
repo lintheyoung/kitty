@@ -13,6 +13,25 @@ export interface CanvasState {
   /** When set, items it accepts can be dragged; the drop reports how far, in millimetres. */
   readonly movable?: ((item: SceneItem) => boolean) | undefined;
   readonly onMove?: ((item: SceneItem, by: Point) => void) | undefined;
+  /** When set, clicks draw a wire; it is reported when it reaches a pin or is ended. */
+  readonly onWire?: ((points: ReadonlyArray<Point>) => void) | undefined;
+}
+
+const SNAP_PX = 9;
+const samePoint = (a: Point, b: Point) => Math.abs(a.x - b.x) < 1e-3 && Math.abs(a.y - b.y) < 1e-3;
+
+/** Where wires can attach: pin ends, wire ends and label anchors. */
+function attachPoints(scene: Scene): ReadonlyArray<Point> {
+  const points: Array<Point> = [];
+  for (const item of scene.items) {
+    for (const pin of item.pins ?? []) points.push(pin.at);
+    if (item.anchor) points.push(item.anchor);
+    if (item.kind !== "wire") continue;
+    for (const shape of item.shapes) {
+      if (shape.kind === "line") points.push(...shape.points);
+    }
+  }
+  return points;
 }
 
 /** Dragged parts land on the schematic grid. */
@@ -44,6 +63,9 @@ export class CanvasController {
   private carry:
     | { readonly item: SceneItem; readonly x: number; readonly y: number; by: Point }
     | undefined;
+  /** The wire being drawn, and where the pointer would put its next corner. */
+  private wire: Array<Point> = [];
+  private hover: { readonly point: Point; readonly attached: boolean } | undefined;
   private readonly dispose: () => void;
 
   constructor(private readonly canvas: HTMLCanvasElement) {
@@ -70,7 +92,7 @@ export class CanvasController {
       if (event.button !== 0 && event.button !== 1) return;
       this.drag = { x: event.clientX, y: event.clientY, moved: false };
       canvas.setPointerCapture(event.pointerId);
-      const item = event.button === 0 ? this.itemAt(event) : undefined;
+      const item = event.button === 0 && !this.state?.onWire ? this.itemAt(event) : undefined;
       this.carry =
         item && this.state?.movable?.(item)
           ? { item, x: event.clientX, y: event.clientY, by: { x: 0, y: 0 } }
@@ -78,6 +100,10 @@ export class CanvasController {
     };
     const onMove = (event: PointerEvent) => {
       const drag = this.drag;
+      if (!drag && this.state?.onWire) {
+        this.hover = this.wirePoint(event);
+        this.schedule();
+      }
       if (!drag) return;
       const dx = event.clientX - drag.x;
       const dy = event.clientY - drag.y;
@@ -114,9 +140,14 @@ export class CanvasController {
         return;
       }
       if (drag.moved) return;
+      if (this.state.onWire) return this.extendWire(this.wirePoint(event));
       this.state.onPick(this.itemAt(event));
     };
-    const onDouble = () => this.fit();
+    const onDouble = () => {
+      // In the wire tool a double click ends the wire where it is.
+      if (this.state?.onWire) this.finishWire();
+      else this.fit();
+    };
     canvas.addEventListener("wheel", onWheel, { passive: false });
     canvas.addEventListener("pointerdown", onDown);
     canvas.addEventListener("pointermove", onMove);
@@ -142,6 +173,10 @@ export class CanvasController {
 
   update(state: CanvasState): void {
     this.state = state;
+    if (!state.onWire) {
+      this.wire = [];
+      this.hover = undefined;
+    }
     // A different drawing starts framed; the same one re-read keeps the user's view.
     if (this.fitted !== state.scene && this.width > 0) {
       const same =
@@ -179,6 +214,81 @@ export class CanvasController {
     );
     this.view = { scale, x: this.width / 2 - cx * scale, y: this.height / 2 - cy * scale };
     this.schedule();
+  }
+
+  /** The pointer's place for a wire: a nearby pin or wire end, else the grid. */
+  private wirePoint(event: PointerEvent): { readonly point: Point; readonly attached: boolean } {
+    const rect = this.canvas.getBoundingClientRect();
+    const at = {
+      x: (event.clientX - rect.left - this.view.x) / this.view.scale,
+      y: (event.clientY - rect.top - this.view.y) / this.view.scale,
+    };
+    let best: Point | undefined;
+    let reach = SNAP_PX / this.view.scale;
+    for (const point of this.state ? attachPoints(this.state.scene) : []) {
+      const distance = Math.hypot(point.x - at.x, point.y - at.y);
+      if (distance <= reach) {
+        best = point;
+        reach = distance;
+      }
+    }
+    if (best) return { point: best, attached: true };
+    const grid = (value: number) =>
+      Math.round(Math.round(value / MOVE_GRID) * MOVE_GRID * 1e4) / 1e4;
+    return { point: { x: grid(at.x), y: grid(at.y) }, attached: false };
+  }
+
+  /** The straight runs from the wire's end to `point`: across first, then up or down. */
+  private legs(point: Point): ReadonlyArray<Point> {
+    const last = this.wire.at(-1);
+    if (!last || samePoint(last, point)) return [];
+    const corner = { x: point.x, y: last.y };
+    return samePoint(corner, last) || samePoint(corner, point) ? [point] : [corner, point];
+  }
+
+  private extendWire(next: { readonly point: Point; readonly attached: boolean }): void {
+    if (this.wire.length === 0) {
+      this.wire = [next.point];
+      this.schedule();
+      return;
+    }
+    const legs = this.legs(next.point);
+    this.wire.push(...legs);
+    // Reaching something to connect to, or clicking the same spot again, ends the wire.
+    if (next.attached || legs.length === 0) this.finishWire();
+    else this.schedule();
+  }
+
+  private finishWire(): void {
+    const points = this.wire;
+    this.wire = [];
+    this.schedule();
+    if (points.length >= 2) this.state?.onWire?.(points);
+  }
+
+  private drawWire(ctx: CanvasRenderingContext2D): void {
+    if (!this.state?.onWire || !this.hover) return;
+    const ratio = window.devicePixelRatio || 1;
+    const { scale, x, y } = this.view;
+    const points = [...this.wire, ...this.legs(this.hover.point)];
+    ctx.save();
+    ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+    ctx.strokeStyle = this.state.options.selectionColor;
+    ctx.fillStyle = this.state.options.selectionColor;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    for (const [index, point] of points.entries()) {
+      if (index === 0) ctx.moveTo(point.x * scale + x, point.y * scale + y);
+      else ctx.lineTo(point.x * scale + x, point.y * scale + y);
+    }
+    ctx.stroke();
+    // A ring shows the wire will attach here; a dot is a free corner on the grid.
+    const { point, attached } = this.hover;
+    ctx.beginPath();
+    ctx.arc(point.x * scale + x, point.y * scale + y, attached ? 6 : 2.5, 0, Math.PI * 2);
+    if (attached) ctx.stroke();
+    else ctx.fill();
+    ctx.restore();
   }
 
   private itemAt(event: PointerEvent): SceneItem | undefined {
@@ -248,5 +358,6 @@ export class CanvasController {
       this.state.options,
     );
     this.drawCarry(ctx);
+    this.drawWire(ctx);
   }
 }

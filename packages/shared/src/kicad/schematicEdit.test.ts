@@ -192,6 +192,79 @@ describe("schematic edits", () => {
     expect(netsOf(moved.source)).toEqual({ "R1.1": "A", "R1.2": "B" });
   });
 
+  it("draws wires between pins, joins them with junctions, and says what was done", () => {
+    const placed = applySchematicEdits(
+      BLANK,
+      [
+        { op: "place", symbol: "jlc:R", at: { x: 50.8, y: 50.8 } },
+        { op: "place", symbol: "jlc:R", at: { x: 76.2, y: 50.8 } },
+        { op: "place", symbol: "jlc:R", at: { x: 63.5, y: 63.5 }, rotation: 90 },
+      ],
+      context(),
+    ).source;
+    // R1 pin 2 is at (55.88, 50.8), R2 pin 1 at (71.12, 50.8), R3 pin 2 at (63.5, 58.42).
+    const wired = applySchematicEdits(
+      placed,
+      [
+        {
+          op: "wire",
+          points: [
+            { x: 55.88, y: 50.8 },
+            { x: 71.12, y: 50.8 },
+          ],
+        },
+        {
+          op: "wire",
+          points: [
+            { x: 63.5, y: 58.42 },
+            { x: 63.5, y: 50.8 },
+          ],
+        },
+        { op: "label", net: "MID", at: { x: 60.96, y: 50.8 } },
+      ],
+      context(),
+    );
+    expect(wired.summary).toEqual([
+      "Drew a wire from R1 pin 2 (B) to R2 pin 1 (A)",
+      "Drew a wire from R3 pin 2 (B) to (63.5, 50.8)",
+      "Added the label MID at (60.96, 50.8)",
+    ]);
+    expect(wired.source.split("(junction").length - 1).toBe(1);
+    expect(netsOf(wired.source)).toMatchObject({ "R1.2": "MID", "R2.1": "MID", "R3.2": "MID" });
+
+    const wire = /\(wire[^]*?\(uuid "([^"]+)"\)/.exec(wired.source)?.[1] ?? "";
+    const erased = applySchematicEdits(wired.source, [{ op: "erase", id: wire }], context());
+    expect(erased.summary).toEqual(["Removed a wire at R1 pin 2 (B)"]);
+    expect(erased.source.split("(wire").length - 1).toBe(1);
+    expect(() =>
+      applySchematicEdits(erased.source, [{ op: "erase", id: wire }], context()),
+    ).toThrow(/no longer on the sheet/);
+  });
+
+  it("describes edits to parts for the change log", () => {
+    const { summary } = applySchematicEdits(
+      BLANK,
+      [
+        { op: "place", symbol: "jlc:R", value: "10k", nets: { "1": "+3V3", "2": "EN" } },
+        { op: "connect", reference: "R1", nets: { "2": "BOOT", "1": "" }, noConnect: [] },
+        { op: "set", reference: "R1", property: "Value", value: "4.7k" },
+        { op: "move", reference: "R1", by: { x: 2.54, y: 0 } },
+        { op: "move", reference: "R1", rotateBy: 90 },
+        { op: "remove", reference: "R1" },
+      ],
+      context(),
+    );
+    expect(summary).toEqual([
+      "Placed R1 (jlc:R, 10k) with pins 1=+3V3, 2=EN",
+      "Disconnected R1 pin 1",
+      "Connected R1 pin 2 to BOOT",
+      "Set R1 Value to 4.7k",
+      expect.stringMatching(/^Moved R1 to \(/),
+      "Turned R1 to 90 degrees",
+      "Removed R1 (4.7k)",
+    ]);
+  });
+
   it("marks unused pins as not connected", () => {
     const { source } = applySchematicEdits(
       BLANK,

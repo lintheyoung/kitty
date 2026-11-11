@@ -56,6 +56,12 @@ export const SchematicEdit = Schema.Union([
   }),
   Schema.Struct({ op: Schema.Literal("remove"), reference: Reference }),
   Schema.Struct({
+    op: Schema.Literal("erase"),
+    id: Schema.String.annotate({
+      description: "The uuid of a wire, label, junction or no-connect mark to remove.",
+    }),
+  }),
+  Schema.Struct({
     op: Schema.Literal("set"),
     reference: Reference,
     property: Schema.String.annotate({ description: "Value, Reference, or any other field." }),
@@ -97,6 +103,39 @@ export const SchematicHistoryResult = Schema.Struct({
 });
 export type SchematicHistoryResult = typeof SchematicHistoryResult.Type;
 
+/** Who made a change: the user in the designer, or the agent with sch_edit. */
+export const SchematicChangeAuthor = Schema.Literals(["user", "agent"]);
+export type SchematicChangeAuthor = typeof SchematicChangeAuthor.Type;
+
+/** One entry of a design's change log. */
+export const SchematicChange = Schema.Struct({
+  /** ISO time of the change. */
+  at: Schema.String,
+  by: SchematicChangeAuthor,
+  /** What was done, one line per edit. */
+  summary: Schema.Array(Schema.String),
+});
+export type SchematicChange = typeof SchematicChange.Type;
+
+export const SchematicChangesInput = Schema.Struct({
+  path: Schema.String.annotate({
+    description: "The design: its .kicad_sch, .kicad_pro or directory, relative to the workspace.",
+  }),
+  limit: Schema.optional(
+    Schema.Int.annotate({ description: "At most this many of the newest changes. Default 30." }),
+  ),
+});
+export type SchematicChangesInput = typeof SchematicChangesInput.Type;
+
+export const SchematicChangesResult = Schema.Struct({
+  schematic: Schema.String,
+  /** Oldest first. */
+  changes: Schema.Array(SchematicChange),
+  /** The user's changes since the agent last edited, as plain lines. */
+  userChanges: Schema.Array(Schema.String),
+});
+export type SchematicChangesResult = typeof SchematicChangesResult.Type;
+
 export const SchematicEditedPart = Schema.Struct({
   reference: Schema.String,
   symbol: Schema.String,
@@ -121,5 +160,7 @@ export const SchematicEditResult = Schema.Struct({
   warnings: Schema.Array(Schema.String),
   /** KiCad's electrical check of the result. Use kicad_erc for the details. */
   erc: Schema.Struct({ errors: Schema.Int, warnings: Schema.Int }),
+  /** What the user changed by hand in the designer since the agent last edited this schematic. */
+  userChanges: Schema.Array(Schema.String),
 });
 export type SchematicEditResult = typeof SchematicEditResult.Type;

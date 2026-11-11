@@ -38,6 +38,8 @@ import {
   JlcPartSearchInput,
   JlcPartSearchResult,
   KicadBomInput,
+  SchematicChangesInput,
+  SchematicChangesResult,
   SchematicEditInput,
   SchematicEditResult,
   KicadBomResult,
@@ -370,7 +372,7 @@ const JlcPartImportTool = Tool.make("jlc_part_import", {
 
 const SchematicEditTool = Tool.make("sch_edit", {
   description:
-    "Draw or change a schematic. `place` puts a part on the sheet (a free spot is found when `at` is left out) and connects its pins by net name: give `nets` as pin number to net, and every pin with the same net name is connected. Power nets (GND, +3V3, +5V, VBUS) get power symbols, other nets get labels. Use `noConnectRest` for parts with unused pins. `connect` changes the nets of a part already on the sheet; `move`, `remove` and `set` change it. Parts must be `jlc:` symbols from jlc_part_import. A supply net that no regulator output drives needs a power:PWR_FLAG placed with that net on pin 1. KiCad reads the result back and nothing is saved if it cannot; the reply gives each part's pins with their nets and the ERC error count.",
+    "Draw or change a schematic. `place` puts a part on the sheet (a free spot is found when `at` is left out) and connects its pins by net name: give `nets` as pin number to net, and every pin with the same net name is connected. Power nets (GND, +3V3, +5V, VBUS) get power symbols, other nets get labels. Use `noConnectRest` for parts with unused pins. `connect` changes the nets of a part already on the sheet; `move`, `remove` and `set` change it. Parts must be `jlc:` symbols from jlc_part_import. A supply net that no regulator output drives needs a power:PWR_FLAG placed with that net on pin 1. KiCad reads the result back and nothing is saved if it cannot; the reply gives each part's pins with their nets, the ERC error count, and `userChanges`: what the user changed by hand since your last edit.",
   parameters: SchematicEditInput,
   success: SchematicEditResult,
   failure: HardwareFailure,
@@ -379,6 +381,20 @@ const SchematicEditTool = Tool.make("sch_edit", {
   .annotate(Tool.Title, "Edit schematic")
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, false)
+  .annotate(Tool.OpenWorld, false);
+
+const SchematicChangesTool = Tool.make("sch_changes", {
+  description:
+    "The schematic's change log: what the user changed by hand in the designer and what you changed with sch_edit, oldest first. `userChanges` lists what the user did since your last edit. Call it before you plan changes to a schematic the user may have touched, and respect what they did.",
+  parameters: SchematicChangesInput,
+  success: SchematicChangesResult,
+  failure: HardwareFailure,
+  dependencies: kicadDependencies,
+})
+  .annotate(Tool.Title, "Schematic change log")
+  .annotate(Tool.Readonly, true)
+  .annotate(Tool.Destructive, false)
+  .annotate(Tool.Idempotent, true)
   .annotate(Tool.OpenWorld, false);
 
 const HardwareProjectInspectTool = Tool.make("hw_project_inspect", {
@@ -442,6 +458,7 @@ export const HardwareToolkit = Toolkit.make(
   JlcPartSearchTool,
   JlcPartImportTool,
   SchematicEditTool,
+  SchematicChangesTool,
   HardwareProjectNewTool,
   HardwareProjectInspectTool,
   HardwarePinmapSyncTool,

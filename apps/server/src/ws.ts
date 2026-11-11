@@ -3400,7 +3400,12 @@ export const layerWsRpc = (
         [WS_METHODS.hardwareSchematicEdit]: (input) =>
           requireHardwareWorkspace(input).pipe(
             Effect.flatMap((workspaceRoot) =>
-              kicadService.schematicEdit({ path: input.path, edits: input.edits, workspaceRoot }),
+              kicadService.schematicEdit({
+                path: input.path,
+                edits: input.edits,
+                workspaceRoot,
+                by: "user",
+              }),
             ),
           ),
         [WS_METHODS.hardwareSchematicHistory]: (input) =>

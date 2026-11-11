@@ -28,6 +28,10 @@ import {
   KittyBoard,
   KittyComponents,
   KittyPinmap,
+  type SchematicChange,
+  type SchematicChangeAuthor,
+  type SchematicChangesInput,
+  type SchematicChangesResult,
   type SchematicEditInput,
   type SchematicEditResult,
   type SchematicHistoryResult,
@@ -39,6 +43,7 @@ import { schematicSubSheets, type SubSheet } from "@t3tools/shared/kicad/schemat
 import { type Node, parseDoc } from "@t3tools/shared/kicad/sexprDoc";
 import { librarySymbols } from "@t3tools/shared/kicad/symbolLibrary";
 import * as Context from "effect/Context";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -71,6 +76,12 @@ import {
 } from "./projectModel.ts";
 import { parseIdfProjectName, parseKicadCliVersion } from "./toolchainVersions.ts";
 import { blankBoard, blankProject, blankSchematic } from "./kicadBlank.ts";
+import {
+  appendChange,
+  CHANGE_LOG_FILE,
+  parseChangeLog,
+  userChangesSinceAgent,
+} from "./schematicChangeLog.ts";
 import { resolveInWorkspace } from "./workspacePath.ts";
 
 type InWorkspace<A> = A & { readonly workspaceRoot: string };
@@ -129,8 +140,15 @@ export class KicadService extends Context.Service<
     ) => Effect.Effect<KicadBoardModelResult, HardwareToolError>;
     /** Changes a schematic sheet; KiCad reads the result back before it is saved. */
     readonly schematicEdit: (
-      input: InWorkspace<SchematicEditInput>,
+      input: InWorkspace<SchematicEditInput> & {
+        /** Who is editing; the agent unless said otherwise. */
+        readonly by?: SchematicChangeAuthor;
+      },
     ) => Effect.Effect<SchematicEditResult, HardwareToolError>;
+    /** The design's change log, and what the user changed since the agent last edited. */
+    readonly schematicChanges: (
+      input: InWorkspace<SchematicChangesInput>,
+    ) => Effect.Effect<SchematicChangesResult, HardwareToolError>;
     /** Steps back or forward through the edits made with `schematicEdit`. */
     readonly schematicHistory: (
       input: InWorkspace<{ readonly path: string; readonly step: SchematicHistoryStep }>,
@@ -1109,10 +1127,49 @@ export const make = Effect.fn("KicadService.make")(function* () {
   const isEditError = Schema.is(SchematicEditError);
   const HISTORY_LIMIT = 50;
   /** Earlier and undone versions of each schematic edited here, newest last. */
+  interface Version {
+    readonly source: string;
+    /** What the edit that replaced this version did. */
+    readonly summary: ReadonlyArray<string>;
+  }
   const histories = new Map<
     string,
-    { undo: Array<string>; redo: Array<string>; current: string }
+    { undo: Array<Version>; redo: Array<Version>; current: string }
   >();
+
+  const changeLog = (directory: string) => path.join(directory, CHANGE_LOG_FILE);
+  const readChanges = (directory: string) =>
+    fs.readFileString(changeLog(directory)).pipe(
+      Effect.map(parseChangeLog),
+      Effect.orElseSucceed((): ReadonlyArray<SchematicChange> => []),
+    );
+  /** Adds to the design's change log; a log that cannot be written never fails an edit. */
+  const recordChange = Effect.fn("KicadService.recordChange")(function* (
+    directory: string,
+    by: SchematicChangeAuthor,
+    summary: ReadonlyArray<string>,
+  ) {
+    if (summary.length === 0) return;
+    const file = changeLog(directory);
+    const at = DateTime.formatIso(yield* DateTime.now);
+    yield* Effect.gen(function* () {
+      yield* fs.makeDirectory(path.dirname(file), { recursive: true });
+      const existing = yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => ""));
+      yield* fs.writeFileString(file, appendChange(existing, { at, by, summary: [...summary] }));
+    }).pipe(Effect.ignore);
+  });
+
+  const schematicChanges = Effect.fn("KicadService.schematicChanges")(function* (
+    input: InWorkspace<SchematicChangesInput>,
+  ) {
+    const { file, relative } = yield* resolveDesign(input.workspaceRoot, input.path, ".kicad_sch");
+    const changes = yield* readChanges(path.dirname(file));
+    return {
+      schematic: relative,
+      changes: changes.slice(-Math.min(Math.max(input.limit ?? 30, 1), 200)),
+      userChanges: userChangesSinceAgent(changes),
+    } satisfies SchematicChangesResult;
+  });
   /** The file's history, started over when someone else has saved the file since. */
   const historyOf = (file: string, onDisk: string) => {
     const known = histories.get(file);
@@ -1134,11 +1191,17 @@ export const make = Effect.fn("KicadService.make")(function* () {
       input.step === "undo" ? [history.undo, history.redo] : [history.redo, history.undo];
     const target = from.pop();
     if (target !== undefined) {
-      to.push(onDisk);
-      history.current = target;
+      to.push({ source: onDisk, summary: target.summary });
+      history.current = target.source;
       yield* fs
-        .writeFileString(file, target)
+        .writeFileString(file, target.source)
         .pipe(Effect.mapError((cause) => failure("command_failed", cause.message)));
+      // Only the designer steps through history, so this is the user's doing.
+      yield* recordChange(
+        path.dirname(file),
+        "user",
+        target.summary.map((line) => `${input.step === "undo" ? "Undid" : "Redid"}: ${line}`),
+      );
     }
     return {
       schematic: relative,
@@ -1149,7 +1212,7 @@ export const make = Effect.fn("KicadService.make")(function* () {
   });
 
   const schematicEdit = Effect.fn("KicadService.schematicEdit")(function* (
-    input: InWorkspace<SchematicEditInput>,
+    input: InWorkspace<SchematicEditInput> & { readonly by?: SchematicChangeAuthor },
   ) {
     const { file, relative } = yield* resolveDesign(input.workspaceRoot, input.path, ".kicad_sch");
     const directory = path.dirname(file);
@@ -1230,10 +1293,15 @@ export const make = Effect.fn("KicadService.make")(function* () {
     );
     yield* io(fs.writeFileString(file, edited.source));
     const history = historyOf(file, before);
-    history.undo.push(before);
+    history.undo.push({ source: before, summary: edited.summary });
     if (history.undo.length > HISTORY_LIMIT) history.undo.shift();
     history.redo.length = 0;
     history.current = edited.source;
+    const author = input.by ?? "agent";
+    // The agent hears what the user changed by hand since it last touched the schematic.
+    const userChanges =
+      author === "agent" ? userChangesSinceAgent(yield* readChanges(directory)) : [];
+    yield* recordChange(directory, author, edited.summary);
 
     const warnings: Array<string> = [];
     const parts = edited.placed.map((part) => {
@@ -1265,11 +1333,13 @@ export const make = Effect.fn("KicadService.make")(function* () {
       removed: edited.removed,
       warnings,
       erc: { errors: checked.erc.summary.errors, warnings: checked.erc.summary.warnings },
+      userChanges,
     } satisfies SchematicEditResult;
   });
 
   return KicadService.of({
     schematicEdit,
+    schematicChanges,
     schematicHistory,
     upgradeLibraries,
     boardModel,
