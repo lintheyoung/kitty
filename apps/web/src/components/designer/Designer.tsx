@@ -7,6 +7,7 @@ import { buildSchematicScene } from "@t3tools/shared/kicad/schematicScene";
 import {
   ArrowLeftRightIcon,
   LayersIcon,
+  MessageSquareIcon,
   PackageSearchIcon,
   PencilIcon,
   PencilLineIcon,
@@ -20,6 +21,7 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 
+import { useComposerDraftStore } from "~/composerDraftStore";
 import { useTheme } from "~/hooks/useTheme";
 import { cn } from "~/lib/utils";
 
@@ -29,6 +31,7 @@ import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { BoardModelView } from "./BoardModelView";
 import { DesignCanvas } from "./DesignCanvas";
+import { designMention, withMention } from "./designMention.ts";
 import { PartSearch } from "./PartSearch";
 import { ProblemList } from "./ProblemList";
 import { boardProblems, countProblems, sheetProblems } from "./problems.ts";
@@ -158,6 +161,8 @@ function Properties(props: {
   readonly onShowOther: () => void;
   readonly onPickNet: (net: string) => void;
   readonly onClose: () => void;
+  /** Present when there is a part or net to bring up with the agent. */
+  readonly onAsk?: (() => void) | undefined;
   /** Present when the item is a wire, label or mark that can be removed. */
   readonly onErase?: (() => void) | undefined;
   /** Present when the part can be changed here. */
@@ -195,6 +200,12 @@ function Properties(props: {
           <Button size="xs" variant="outline" onClick={props.onShowOther}>
             <ArrowLeftRightIcon />
             {props.otherName}
+          </Button>
+        ) : null}
+        {props.onAsk ? (
+          <Button size="xs" variant="outline" onClick={props.onAsk}>
+            <MessageSquareIcon />
+            Ask
           </Button>
         ) : null}
         {props.onErase ? (
@@ -591,6 +602,23 @@ function DesignerView(props: {
     }
   };
 
+  // Puts the picked part or net into the chat box, for the user to finish the question.
+  const mention =
+    selectedItem && current
+      ? designMention({
+          ref: selection?.ref,
+          value: selection?.ref ? selectedItem.value : undefined,
+          net: selection?.net,
+          file: current.file,
+        })
+      : undefined;
+  const askAbout = () => {
+    if (!mention) return;
+    const store = useComposerDraftStore.getState();
+    const prompt = store.getComposerDraft(props.threadRef)?.prompt ?? "";
+    store.setPrompt(props.threadRef, withMention(prompt, mention));
+  };
+
   const pick = (item: SceneItem | undefined) => {
     setReveal(undefined);
     if (!item || !scene) return setSelection(undefined);
@@ -872,6 +900,7 @@ function DesignerView(props: {
                 }}
                 onPickNet={(net) => selection && setSelection({ ...selection, net })}
                 onClose={() => setSelection(undefined)}
+                onAsk={mention ? askAbout : undefined}
                 onErase={erasable ? removeSelected : undefined}
                 edit={
                   selectedPart?.ref
