@@ -1,5 +1,6 @@
 /** Draws a scene onto a 2D canvas. */
 import { displayNet } from "@t3tools/shared/kicad/pick";
+import type { Airwire } from "@t3tools/shared/kicad/ratsnest";
 import {
   arcPoints,
   type Box,
@@ -27,8 +28,31 @@ export interface DrawOptions {
   readonly fontFamily: string;
   /** Problems found by a check, drawn at a fixed screen size over the drawing. */
   readonly markers?: ReadonlyArray<Marker> | undefined;
+  /** Connections still to route; the ones in focus are drawn stronger. */
+  readonly airwires?: Airwires | undefined;
   /** A change under review: what it added is marked, what it removed is drawn back in. */
   readonly diff?: DiffOverlay | undefined;
+}
+
+export interface Airwires {
+  readonly wires: ReadonlyArray<Airwire>;
+  readonly color: string;
+  /** The net the user is looking at, if any. */
+  readonly net?: string | undefined;
+}
+
+function drawAirwires(ctx: CanvasRenderingContext2D, airwires: Airwires, view: View) {
+  ctx.strokeStyle = airwires.color;
+  for (const wire of airwires.wires) {
+    const chosen = airwires.net !== undefined && wire.net === airwires.net;
+    ctx.globalAlpha = airwires.net === undefined ? 0.6 : chosen ? 1 : 0.15;
+    ctx.lineWidth = (chosen ? 1.5 : 0.75) / view.scale;
+    ctx.beginPath();
+    ctx.moveTo(wire.from.x, wire.from.y);
+    ctx.lineTo(wire.to.x, wire.to.y);
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
 }
 
 export interface DiffOverlay {
@@ -274,6 +298,7 @@ export function drawScene(
     }
   }
   ctx.globalAlpha = 1;
+  if (options.airwires) drawAirwires(ctx, options.airwires, view);
   if (diff) {
     // What the change took away is drawn back in one colour, over the new drawing.
     const removedOptions = { ...options, color: () => diff.removedColor };

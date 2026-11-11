@@ -67,6 +67,8 @@ const BOARD_OTHER = "#8a93a3";
 
 export const SELECTION_COLOR = "#ffffff";
 export const SELECTION_COLOR_LIGHT = "#1d4ed8";
+/** Connections still to route, drawn as thin lines between pads. */
+export const AIRWIRE_COLOR = "#d6dbe6";
 /** What a change under review added, and what it took away. */
 export const DIFF_ADDED_COLOR = "#22c55e";
 export const DIFF_REMOVED_COLOR = "#ef4444";

@@ -1,6 +1,7 @@
 import type { KicadDesignSourceResult, ProjectId, ScopedThreadRef } from "@t3tools/contracts";
 import { buildBoardScene } from "@t3tools/shared/kicad/boardScene";
 import { displayNet, sameNet } from "@t3tools/shared/kicad/pick";
+import { ratsnest } from "@t3tools/shared/kicad/ratsnest";
 import { type Box, type Scene, type SceneItem, unionBoxes } from "@t3tools/shared/kicad/scene";
 import { diffScenes, type SceneDiff } from "@t3tools/shared/kicad/sceneDiff";
 import { buildSchematicScene } from "@t3tools/shared/kicad/schematicScene";
@@ -686,6 +687,10 @@ function DesignerView(props: {
   const outline = boardEditable
     ? unionBoxes(scene.items.filter((item) => item.layer === "Edge.Cuts").map((item) => item.box))
     : undefined;
+  // The connections left to route, known whichever drawing is showing.
+  const boardScene = drawings.find((drawing) => drawing.scene?.kind === "board")?.scene;
+  const boardWires = boardScene ? ratsnest(boardScene) : [];
+  const airwires = boardEditable ? boardWires : undefined;
   const selectedFootprint =
     boardEditable && selection?.ref
       ? scene.items.find((item) => item.kind === "footprint" && item.ref === selection.ref)
@@ -788,7 +793,7 @@ function DesignerView(props: {
           : undefined;
       })(),
       tracks: count("board", (item) => item.kind === "track"),
-      unrouted: checks.drc?.unconnected.length,
+      unrouted: checks.drc?.unconnected.length ?? boardWires.length,
       errors: checked
         ? (checks.erc?.summary.errors ?? 0) + (checks.drc?.summary.errors ?? 0)
         : undefined,
@@ -1047,6 +1052,8 @@ function DesignerView(props: {
               reveal={reveal}
               markers={markers}
               diff={current?.review?.diff}
+              airwires={airwires}
+              airwireNet={scene.kind === selection?.from ? selection.net : undefined}
               onPick={pick}
               onWire={
                 editable && wiring
@@ -1210,6 +1217,9 @@ function DesignerView(props: {
         {scene ? (
           <span className="shrink-0">
             {scene.items.filter(isPart).length} parts
+            {scene.kind === "board" && boardWires.length > 0
+              ? ` · ${boardWires.length} to route`
+              : ""}
             {selection?.net ? ` · net ${displayNet(selection.net)}` : ""}
           </span>
         ) : null}

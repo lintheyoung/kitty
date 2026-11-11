@@ -1,3 +1,4 @@
+import type { Airwire } from "@t3tools/shared/kicad/ratsnest";
 import type { Point, Scene, SceneItem } from "@t3tools/shared/kicad/scene";
 import type { SceneDiff } from "@t3tools/shared/kicad/sceneDiff";
 import { MaximizeIcon, MinusIcon, PlusIcon } from "lucide-react";
@@ -9,6 +10,7 @@ import { Button } from "../ui/button";
 import { CanvasController } from "./canvasController.ts";
 import type { Marker } from "./sceneRenderer.ts";
 import {
+  AIRWIRE_COLOR,
   DIFF_ADDED_COLOR,
   DIFF_REMOVED_COLOR,
   paletteFor,
@@ -30,6 +32,9 @@ export function DesignCanvas(props: {
   /** An item to bring into view, e.g. after cross-probing from the other drawing. */
   readonly reveal?: SceneItem | undefined;
   readonly markers?: ReadonlyArray<Marker> | undefined;
+  /** Connections still to route, and the net to bring out among them. */
+  readonly airwires?: ReadonlyArray<Airwire> | undefined;
+  readonly airwireNet?: string | undefined;
   /** A change under review, marked on the drawing. */
   readonly diff?: SceneDiff | undefined;
   readonly onPick: (item: SceneItem | undefined) => void;
@@ -53,7 +58,7 @@ export function DesignCanvas(props: {
   };
   const { scene, dark, hidden, selectedIds, focus, onPick, reveal, markers, movable, onMove } =
     props;
-  const { onWire, diff, moveGrid } = props;
+  const { onWire, diff, moveGrid, airwires, airwireNet } = props;
   // The board always sits on a dark canvas, so its selection outline stays light.
   const lightSurface = scene.kind === "schematic" && !dark;
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- pushes the latest drawing and options into the imperative canvas controller
@@ -73,6 +78,7 @@ export function DesignCanvas(props: {
         focus,
         fontFamily: FONT_FAMILY,
         markers,
+        airwires: airwires ? { wires: airwires, color: AIRWIRE_COLOR, net: airwireNet } : undefined,
         diff: diff
           ? {
               added: diff.added,
@@ -97,6 +103,8 @@ export function DesignCanvas(props: {
     onWire,
     diff,
     moveGrid,
+    airwires,
+    airwireNet,
   ]);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- scrolls the imperative canvas to an item chosen outside it
   useEffect(() => {
