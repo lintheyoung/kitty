@@ -16,6 +16,16 @@ const DRAG_THRESHOLD_PX = 4;
 const PICK_TOLERANCE_PX = 4;
 const WHEEL_ZOOM = 0.0015;
 
+/**
+ * A mouse wheel turns in fixed notches (multiples of 120 in the legacy delta)
+ * and never sideways; a trackpad sends fine-grained deltas on both axes.
+ */
+function isMouseWheel(event: WheelEvent): boolean {
+  if (event.deltaMode !== WheelEvent.DOM_DELTA_PIXEL) return true;
+  const legacy = (event as WheelEvent & { readonly wheelDeltaY?: number }).wheelDeltaY;
+  return event.deltaX === 0 && legacy !== undefined && legacy !== 0 && Math.abs(legacy) % 120 === 0;
+}
+
 export class CanvasController {
   private view: View = { scale: 1, x: 0, y: 0 };
   private state: CanvasState | undefined;
@@ -31,14 +41,19 @@ export class CanvasController {
     const onWheel = (event: WheelEvent) => {
       event.preventDefault();
       const rect = canvas.getBoundingClientRect();
-      // Pinch gestures arrive as ctrl+wheel with small deltas; make them feel like the wheel.
-      const delta = event.ctrlKey ? event.deltaY * 4 : event.deltaY;
-      this.view = zoomAt(
-        this.view,
-        Math.exp(-delta * WHEEL_ZOOM),
-        event.clientX - rect.left,
-        event.clientY - rect.top,
-      );
+      if (event.ctrlKey || event.metaKey || isMouseWheel(event)) {
+        // A trackpad pinch arrives as ctrl+wheel with small deltas; scale it up to match.
+        const delta = event.ctrlKey && !isMouseWheel(event) ? event.deltaY * 4 : event.deltaY;
+        this.view = zoomAt(
+          this.view,
+          Math.exp(-delta * WHEEL_ZOOM),
+          event.clientX - rect.left,
+          event.clientY - rect.top,
+        );
+      } else {
+        // Two fingers on a trackpad move the drawing, like every other macOS canvas.
+        this.view = { ...this.view, x: this.view.x - event.deltaX, y: this.view.y - event.deltaY };
+      }
       this.schedule();
     };
     const onDown = (event: PointerEvent) => {

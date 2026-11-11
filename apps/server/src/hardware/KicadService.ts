@@ -10,6 +10,7 @@ import {
   type KicadFabExportResult,
   type KicadNetlistInput,
   type KicadNetlistResult,
+  type KicadBoardModelResult,
   type KicadDesignFile,
   type KicadDesignSourceResult,
   type KicadPreviewKind,
@@ -108,6 +109,10 @@ export class KicadService extends Context.Service<
       title: string,
     ) => Effect.Effect<ReadonlyArray<string>, HardwareToolError>;
     /** SVG drawings of the schematic sheets or the board, for the panel. */
+    /** The board exported as a glTF model. */
+    readonly boardModel: (
+      input: InWorkspace<{ readonly path: string }>,
+    ) => Effect.Effect<KicadBoardModelResult, HardwareToolError>;
     /** The design's files as text, for the client to draw. */
     readonly designSource: (
       input: InWorkspace<{ readonly path: string }>,
@@ -126,6 +131,9 @@ export class KicadService extends Context.Service<
 const BOARD_PREVIEW_LAYERS = "F.Cu,B.Cu,F.Silkscreen,B.Silkscreen,Edge.Cuts";
 /** Keeps a preview reply well under the WebSocket message size. */
 const MAX_PREVIEW_BYTES = 8_000_000;
+/** A model is sent base64 encoded, which adds a third; this stays under the same cap. */
+const MAX_BOARD_MODEL_BYTES = 5_500_000;
+const BOARD_MODEL_DETAIL = ["--include-silkscreen", "--include-soldermask"];
 
 const MAC_KICAD_CLI = "/Applications/KiCad/KiCad.app/Contents/MacOS/kicad-cli";
 
@@ -970,7 +978,49 @@ export const make = Effect.fn("KicadService.make")(function* () {
     } satisfies KicadDesignSourceResult;
   });
 
+  const boardModel = Effect.fn("KicadService.boardModel")(function* (
+    input: InWorkspace<{ readonly path: string }>,
+  ) {
+    const { file, relative } = yield* resolveDesign(input.workspaceRoot, input.path, ".kicad_pcb");
+    const cli = yield* findCli();
+    return yield* Effect.scoped(
+      Effect.gen(function* () {
+        const temp = yield* fs
+          .makeTempDirectoryScoped({ prefix: "kitty-kicad-model-" })
+          .pipe(Effect.mapError((cause) => failure("command_failed", cause.message)));
+        const output = path.join(temp, "board.glb");
+        const exportModel = Effect.fn("KicadService.boardModel.export")(function* (
+          extra: ReadonlyArray<string>,
+        ) {
+          yield* runCli(
+            cli,
+            ["pcb", "export", "glb", "--subst-models", "--force", ...extra, "-o", output, file],
+            path.dirname(file),
+          );
+          return yield* fs
+            .readFile(output)
+            .pipe(Effect.mapError((cause) => failure("command_failed", cause.message)));
+        });
+        // Silkscreen and solder mask make the board look real but can triple its size.
+        const detailed = yield* exportModel(BOARD_MODEL_DETAIL);
+        const bytes = detailed.length <= MAX_BOARD_MODEL_BYTES ? detailed : yield* exportModel([]);
+        if (bytes.length > MAX_BOARD_MODEL_BYTES) {
+          return yield* failure(
+            "command_failed",
+            `The 3D model is ${Math.round(bytes.length / 1e6)} MB, too large to show here. Open the board in KiCad's 3D viewer.`,
+          );
+        }
+        return {
+          file: relative,
+          glb: Buffer.from(bytes).toString("base64"),
+          detailed: bytes === detailed,
+        } satisfies KicadBoardModelResult;
+      }),
+    );
+  });
+
   return KicadService.of({
+    boardModel,
     designSource,
     preview,
     listDesigns,

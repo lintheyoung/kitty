@@ -212,6 +212,13 @@ export const hardwareDesignSource = createEnvironmentRpcQueryAtomFamily(connecti
   staleTimeMs: 5_000,
   idleTtlMs: 5 * 60_000,
 });
+/** The board as a glTF model. Exporting takes a few seconds, so it is cached longer. */
+export const hardwareBoardModel = createEnvironmentRpcQueryAtomFamily(connectionAtomRuntime, {
+  label: "environment-data:hardware:board-model",
+  tag: WS_METHODS.hardwareBoardModel,
+  staleTimeMs: 60_000,
+  idleTtlMs: 5 * 60_000,
+});
 export const hardwareFabExport = createEnvironmentRpcCommand(connectionAtomRuntime, {
   label: "environment-data:hardware:fab-export",
   tag: WS_METHODS.hardwareFabExport,

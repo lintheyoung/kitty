@@ -205,6 +205,17 @@ export const KicadDesignSourceResult = Schema.Struct({
 });
 export type KicadDesignSourceResult = typeof KicadDesignSourceResult.Type;
 
+/** The board as a 3D model for the client to show. */
+export const KicadBoardModelResult = Schema.Struct({
+  /** The board file, relative to the workspace. */
+  file: Schema.String,
+  /** A binary glTF file, base64 encoded. */
+  glb: Schema.String,
+  /** False when silkscreen and solder mask were left out to keep the model small. */
+  detailed: Schema.Boolean,
+});
+export type KicadBoardModelResult = typeof KicadBoardModelResult.Type;
+
 export const KicadFabExportInput = Schema.Struct({
   path: BoardPath,
   outputDir: Schema.optional(

@@ -12,9 +12,12 @@ import { cn } from "~/lib/utils";
 import { hardwareDesigns, hardwareDesignSource } from "../../state/hardware";
 import { useEnvironmentQuery } from "../../state/query";
 import { Button } from "../ui/button";
+import { BoardModelView } from "./BoardModelView";
 import { DesignCanvas } from "./DesignCanvas";
 import { layerLabel, paletteFor, shownByDefault } from "./scenePaint.ts";
 import { scenePaints } from "./sceneRenderer.ts";
+
+const MODEL_TAB = "model";
 
 interface Drawing {
   readonly key: string;
@@ -232,6 +235,8 @@ function DesignerView(props: {
   const source = loaded.data ?? undefined;
   const drawings = source ? parseDrawings(source) : [];
   const current = drawings.find((drawing) => drawing.key === tab) ?? drawings[0];
+  // The 3D view is a tab of its own, available once the design has a board.
+  const showModel = tab === MODEL_TAB && source?.board !== undefined && project !== undefined;
   const scene = current?.scene;
   const hidden = (() => {
     const result = new Set<string>();
@@ -300,7 +305,7 @@ function DesignerView(props: {
           <Button
             key={drawing.key}
             size="xs"
-            variant={drawing === current ? "outline" : "ghost-muted"}
+            variant={drawing === current && !showModel ? "outline" : "ghost-muted"}
             onClick={() => {
               setTab(drawing.key);
               setReveal(undefined);
@@ -309,6 +314,15 @@ function DesignerView(props: {
             {drawing.name}
           </Button>
         ))}
+        {source?.board ? (
+          <Button
+            size="xs"
+            variant={showModel ? "outline" : "ghost-muted"}
+            onClick={() => setTab(MODEL_TAB)}
+          >
+            3D
+          </Button>
+        ) : null}
         <div className="flex-1" />
         {list.length > 1 ? (
           <select
@@ -328,7 +342,7 @@ function DesignerView(props: {
             ))}
           </select>
         ) : null}
-        {scene?.kind === "board" ? (
+        {scene?.kind === "board" && !showModel ? (
           <Button
             size="xs"
             variant={showLayers ? "outline" : "ghost-muted"}
@@ -349,7 +363,14 @@ function DesignerView(props: {
         </Button>
       </div>
       <div className="relative min-h-0 flex-1">
-        {scene ? (
+        {showModel ? (
+          <BoardModelView
+            className="absolute inset-0"
+            threadRef={props.threadRef}
+            projectId={props.projectId}
+            path={project}
+          />
+        ) : scene ? (
           <>
             <DesignCanvas
               className="absolute inset-0"

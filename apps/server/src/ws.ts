@@ -3376,6 +3376,12 @@ export const layerWsRpc = (
               kicadService.designSource({ path: input.path, workspaceRoot }),
             ),
           ),
+        [WS_METHODS.hardwareBoardModel]: (input) =>
+          requireHardwareWorkspace(input).pipe(
+            Effect.flatMap((workspaceRoot) =>
+              kicadService.boardModel({ path: input.path, workspaceRoot }),
+            ),
+          ),
         [WS_METHODS.hardwareFabExport]: (input) =>
           requireHardwareWorkspace(input).pipe(
             Effect.flatMap((workspaceRoot) =>
