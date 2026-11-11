@@ -45,7 +45,10 @@ it("ranks parts in stock first, then basic, preferred and extended", () => {
             dataManualUrl: "https://www.lcsc.com/datasheet/c4.pdf",
             productBigImageAccessIdUrl: "javascript:alert(1)",
           }),
-          row("C5", "base", 500),
+          row("C5", "base", 500, {
+            minImageAccessIdUrl: "",
+            imageList: [{ productImage: null }, { productImage: "https://img.example/c5.jpg" }],
+          }),
           { componentCode: "none" },
         ],
       },
@@ -62,6 +65,7 @@ it("ranks parts in stock first, then basic, preferred and extended", () => {
       ["C1", "extended"],
     ],
   );
+  assert.equal(result.parts[0]?.image, "https://img.example/c5.jpg");
   assert.deepEqual(result.parts[1], {
     lcsc: "C4",
     mpn: "MPN-C4",

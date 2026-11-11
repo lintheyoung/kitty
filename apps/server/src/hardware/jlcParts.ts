@@ -78,7 +78,16 @@ function toPart(raw: unknown): JlcPart | undefined {
   const category = [string(row.secondSortName), string(row.firstSortName)]
     .filter(Boolean)
     .join(" / ");
-  const image = link(row.minImageAccessIdUrl) || link(row.productBigImageAccessIdUrl);
+  // JLC keeps a part's photo in one of several places, depending on where the part came from.
+  const listed = (Array.isArray(row.imageList) ? row.imageList : [])
+    .map((entry) => link(record(entry).productImage))
+    .find(Boolean);
+  const image =
+    link(row.minImageAccessIdUrl) ||
+    link(row.minImage) ||
+    listed ||
+    link(row.productBigImageAccessIdUrl) ||
+    link(row.componentImageUrl);
   const datasheet = link(row.dataManualUrl);
   return {
     lcsc,

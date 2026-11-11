@@ -6,7 +6,10 @@ import type {
   ProjectId,
   ThreadId,
 } from "@t3tools/contracts";
+import { ImageOffIcon } from "lucide-react";
 import { useState } from "react";
+
+import { cn } from "~/lib/utils";
 
 import { appAtomRegistry } from "../../rpc/atomRegistry";
 import { hardwareJlcImport, hardwareJlcSearch } from "../../state/hardware";
@@ -34,9 +37,15 @@ function formatStock(stock: number): string {
 /** JLC's photo of a part; an empty tile when there is none or it does not load. */
 function PartPhoto(props: { readonly src: string | undefined }) {
   const [failed, setFailed] = useState(false);
+  const shown = props.src !== undefined && !failed;
   return (
-    <div className="size-12 shrink-0 overflow-hidden rounded border bg-white">
-      {props.src && !failed ? (
+    <div
+      className={cn(
+        "flex size-12 shrink-0 items-center justify-center overflow-hidden rounded border",
+        shown ? "bg-white" : "bg-muted text-muted-foreground",
+      )}
+    >
+      {shown ? (
         <img
           src={props.src}
           alt=""
@@ -45,7 +54,9 @@ function PartPhoto(props: { readonly src: string | undefined }) {
           className="size-full object-contain"
           onError={() => setFailed(true)}
         />
-      ) : null}
+      ) : (
+        <ImageOffIcon className="size-4" />
+      )}
     </div>
   );
 }
