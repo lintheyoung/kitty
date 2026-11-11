@@ -284,9 +284,11 @@ function DesignerView(props: {
   if (list.length === 0) {
     return (
       <div className="flex h-full items-center justify-center p-6 text-center text-sm text-muted-foreground">
-        {designs.isPending
-          ? "Looking for KiCad designs…"
-          : "No KiCad design in this project yet. Create one from the Hardware panel, or ask Kitty to start a board."}
+        {designs.error
+          ? designs.error
+          : designs.isPending
+            ? "Looking for KiCad designs…"
+            : "This project has no KiCad design yet. Create one from the Hardware panel, or ask Kitty to start a board."}
       </div>
     );
   }
