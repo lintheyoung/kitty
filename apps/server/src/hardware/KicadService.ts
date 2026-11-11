@@ -110,6 +110,11 @@ export class KicadService extends Context.Service<
       title: string,
     ) => Effect.Effect<ReadonlyArray<string>, HardwareToolError>;
     /** SVG drawings of the schematic sheets or the board, for the panel. */
+    /** Rewrites a symbol library file and a footprint library folder in KiCad's current format. */
+    readonly upgradeLibraries: (input: {
+      readonly symbols: string;
+      readonly footprints: string;
+    }) => Effect.Effect<void, HardwareToolError>;
     /** The board exported as a glTF model. */
     readonly boardModel: (
       input: InWorkspace<{ readonly path: string }>,
@@ -1043,7 +1048,21 @@ export const make = Effect.fn("KicadService.make")(function* () {
     return { stamp: parts.join("|") } satisfies KicadDesignStampResult;
   });
 
+  const upgradeLibraries = Effect.fn("KicadService.upgradeLibraries")(function* (input: {
+    readonly symbols: string;
+    readonly footprints: string;
+  }) {
+    const cli = yield* findCli();
+    yield* runCli(cli, ["sym", "upgrade", "--force", input.symbols], path.dirname(input.symbols));
+    yield* runCli(
+      cli,
+      ["fp", "upgrade", "--force", input.footprints],
+      path.dirname(input.footprints),
+    );
+  });
+
   return KicadService.of({
+    upgradeLibraries,
     boardModel,
     designStamp,
     designSource,

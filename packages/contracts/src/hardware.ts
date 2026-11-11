@@ -8,6 +8,7 @@ export const HardwareCheckId = Schema.Literals([
   "python-env",
   "esptool",
   "kicad",
+  "jlc-parts",
   "serial",
 ]);
 export type HardwareCheckId = typeof HardwareCheckId.Type;
@@ -484,6 +485,14 @@ export const HardwareDesignInput = Schema.Struct({
   path: Schema.String,
 });
 export type HardwareDesignInput = typeof HardwareDesignInput.Type;
+
+/** Import one JLC part into a design's library. */
+export const HardwareJlcImportInput = Schema.Struct({
+  ...HardwareWorkspaceTarget,
+  path: Schema.String,
+  lcsc: Schema.String,
+});
+export type HardwareJlcImportInput = typeof HardwareJlcImportInput.Type;
 
 export const HardwareTestPlansResult = Schema.Struct({
   plans: Schema.Array(

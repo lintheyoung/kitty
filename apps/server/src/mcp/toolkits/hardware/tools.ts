@@ -33,6 +33,10 @@ import {
   HardwarePinmapSyncResult,
   HardwareProjectInspectInput,
   HardwareProjectInspectResult,
+  JlcImportedPart,
+  JlcPartImportInput,
+  JlcPartSearchInput,
+  JlcPartSearchResult,
   KicadBomInput,
   KicadBomResult,
   KicadDrcInput,
@@ -52,6 +56,7 @@ import * as Schema from "effect/Schema";
 import { Tool, Toolkit } from "effect/ai";
 
 import * as HardwareService from "../../../hardware/HardwareService.ts";
+import * as JlcPartsService from "../../../hardware/JlcPartsService.ts";
 import * as KicadService from "../../../hardware/KicadService.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as ProjectService from "../../../project/ProjectService.ts";
@@ -68,6 +73,7 @@ const kicadDependencies = [
   ProjectService.ProjectService,
   Path.Path,
 ];
+const jlcDependencies = [...kicadDependencies, JlcPartsService.JlcPartsService];
 const HardwareFailure = Schema.Union([HardwareToolError, OrchestratorMcpFailure]);
 
 const HardwareDoctorTool = Tool.make("hw_doctor", {
@@ -333,6 +339,33 @@ const HardwareProjectNewTool = Tool.make("hw_hardware_project_new", {
   .annotate(Tool.Destructive, false)
   .annotate(Tool.OpenWorld, false);
 
+const JlcPartSearchTool = Tool.make("jlc_part_search", {
+  description:
+    "Find parts in JLC's assembly catalogue by value and package, part number or function. Parts in stock come first, basic before preferred before extended (extended parts cost a loading fee). Every part on a Kitty board comes from here: search, then jlc_part_import.",
+  parameters: JlcPartSearchInput,
+  success: JlcPartSearchResult,
+  failure: HardwareFailure,
+  dependencies: jlcDependencies,
+})
+  .annotate(Tool.Title, "Search JLC parts")
+  .annotate(Tool.Readonly, true)
+  .annotate(Tool.Destructive, false)
+  .annotate(Tool.Idempotent, true)
+  .annotate(Tool.OpenWorld, true);
+
+const JlcPartImportTool = Tool.make("jlc_part_import", {
+  description:
+    "Bring a JLC part into a design by its LCSC number: its symbol, footprint and 3D model go into the design's lib/jlc library, with the LCSC number on the symbol for the BOM. Returns the symbol and footprint ids and the pins. Importing a part again updates it.",
+  parameters: JlcPartImportInput,
+  success: JlcImportedPart,
+  failure: HardwareFailure,
+  dependencies: jlcDependencies,
+})
+  .annotate(Tool.Title, "Import JLC part")
+  .annotate(Tool.Destructive, false)
+  .annotate(Tool.Idempotent, true)
+  .annotate(Tool.OpenWorld, true);
+
 const HardwareProjectInspectTool = Tool.make("hw_project_inspect", {
   description:
     "Start here in a hardware project: finds the KiCad schematic and board, the ESP-IDF firmware, and hardware/board.json, pinmap.json and components.json, with field-level errors and next steps. Returns board.json and pinmap.json when valid.",
@@ -391,6 +424,8 @@ export const HardwareToolkit = Toolkit.make(
   KicadNetlistTool,
   KicadBomTool,
   KicadFabExportTool,
+  JlcPartSearchTool,
+  JlcPartImportTool,
   HardwareProjectNewTool,
   HardwareProjectInspectTool,
   HardwarePinmapSyncTool,

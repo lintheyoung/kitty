@@ -82,6 +82,7 @@ import * as McpSessionRegistry from "./mcp/McpSessionRegistry.ts";
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
 import * as DeviceService from "./device/DeviceService.ts";
 import * as HardwareService from "./hardware/HardwareService.ts";
+import * as JlcPartsService from "./hardware/JlcPartsService.ts";
 import * as KicadService from "./hardware/KicadService.ts";
 import * as DeviceHubProxy from "./device/DeviceHubProxy.ts";
 import * as PreviewManager from "./preview/Manager.ts";
@@ -505,9 +506,12 @@ const layerDevice = DeviceService.layer.pipe(
   Layer.provide(NetService.layer),
 );
 
-const layerHardware = Layer.mergeAll(HardwareService.layer, KicadService.layer).pipe(
-  Layer.provide(ProcessRunner.layer),
-);
+const layerKicad = KicadService.layer.pipe(Layer.provide(ProcessRunner.layer));
+const layerHardware = Layer.mergeAll(
+  HardwareService.layer,
+  layerKicad,
+  JlcPartsService.layer.pipe(Layer.provide(layerKicad), Layer.provide(FetchHttpClient.layer)),
+).pipe(Layer.provide(ProcessRunner.layer));
 
 const layerWorkspaceEntries = WorkspaceEntries.layer.pipe(Layer.provide(WorkspacePaths.layer));
 

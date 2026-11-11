@@ -62,6 +62,7 @@ export * from "./device.ts";
 export * from "./hardware.ts";
 export * from "./kicad.ts";
 export * from "./boardTests.ts";
+export * from "./jlcParts.ts";
 export * from "./preview.ts";
 export * from "./previewAutomation.ts";
 export * from "./previewCapture.ts";

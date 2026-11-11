@@ -6,6 +6,7 @@ import { buildSchematicScene } from "@t3tools/shared/kicad/schematicScene";
 import {
   ArrowLeftRightIcon,
   LayersIcon,
+  PackageSearchIcon,
   RefreshCwIcon,
   ShieldCheckIcon,
   XIcon,
@@ -20,6 +21,7 @@ import { useEnvironmentQuery } from "../../state/query";
 import { Button } from "../ui/button";
 import { BoardModelView } from "./BoardModelView";
 import { DesignCanvas } from "./DesignCanvas";
+import { PartSearch } from "./PartSearch";
 import { ProblemList } from "./ProblemList";
 import { boardProblems, countProblems, sheetProblems } from "./problems.ts";
 import { layerLabel, paletteFor, shownByDefault } from "./scenePaint.ts";
@@ -238,6 +240,7 @@ function DesignerView(props: {
   const [toggled, setToggled] = useState<ReadonlySet<string>>(new Set());
   const [showLayers, setShowLayers] = useState(false);
   const [showProblems, setShowProblems] = useState(false);
+  const [showParts, setShowParts] = useState(false);
   const [activeProblem, setActiveProblem] = useState<string | undefined>();
 
   const loaded = useEnvironmentQuery(
@@ -395,6 +398,7 @@ function DesignerView(props: {
               if (!checked) void runChecks();
               setShowProblems(!showProblems || !checked);
               setShowLayers(false);
+              setShowParts(false);
             }}
           >
             <ShieldCheckIcon className={cn(checks.running && "animate-pulse")} />
@@ -407,6 +411,19 @@ function DesignerView(props: {
                   : `${counts.errors} errors · ${counts.warnings} warnings`}
           </Button>
         ) : null}
+        {scene?.kind === "schematic" && !showModel && project ? (
+          <Button
+            size="xs"
+            variant={showParts ? "outline" : "ghost-muted"}
+            onClick={() => {
+              setShowParts((shown) => !shown);
+              setShowProblems(false);
+            }}
+          >
+            <PackageSearchIcon />
+            Parts
+          </Button>
+        ) : null}
         {scene?.kind === "board" && !showModel ? (
           <Button
             size="xs"
@@ -414,6 +431,7 @@ function DesignerView(props: {
             onClick={() => {
               setShowLayers((shown) => !shown);
               setShowProblems(false);
+              setShowParts(false);
             }}
           >
             <LayersIcon />
@@ -469,6 +487,14 @@ function DesignerView(props: {
                     return next;
                   })
                 }
+              />
+            ) : null}
+            {showParts && scene.kind === "schematic" && project ? (
+              <PartSearch
+                environmentId={environmentId}
+                threadId={threadId}
+                projectId={props.projectId}
+                path={project}
               />
             ) : null}
             {showProblems && checked ? (

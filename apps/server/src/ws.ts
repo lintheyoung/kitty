@@ -200,6 +200,7 @@ import { terminalOutputStream, withTerminalOutputWindow } from "./terminal/Outpu
 import * as ServerBrowser from "./preview/ServerBrowser.ts";
 import * as DeviceService from "./device/DeviceService.ts";
 import * as HardwareService from "./hardware/HardwareService.ts";
+import * as JlcPartsService from "./hardware/JlcPartsService.ts";
 import * as KicadService from "./hardware/KicadService.ts";
 import { createHardwareRepo } from "./hardware/newHardwareProject.ts";
 import { createBoardTest, listTestPlans, runBoardTests } from "./hardware/boardTestRunner.ts";
@@ -1427,6 +1428,7 @@ export const layerWsRpc = (
       const deviceService = yield* DeviceService.DeviceService;
       const hardwareService = yield* HardwareService.HardwareService;
       const kicadService = yield* KicadService.KicadService;
+      const jlcParts = yield* JlcPartsService.JlcPartsService;
       const requireHardwareWorkspace = Effect.fn("ws.requireHardwareWorkspace")(function* (target: {
         readonly threadId: ThreadId;
         readonly projectId: ProjectId;
@@ -3386,6 +3388,13 @@ export const layerWsRpc = (
           requireHardwareWorkspace(input).pipe(
             Effect.flatMap((workspaceRoot) =>
               kicadService.designStamp({ path: input.path, workspaceRoot }),
+            ),
+          ),
+        [WS_METHODS.hardwareJlcSearch]: (input) => jlcParts.search(input),
+        [WS_METHODS.hardwareJlcImport]: (input) =>
+          requireHardwareWorkspace(input).pipe(
+            Effect.flatMap((workspaceRoot) =>
+              jlcParts.importPart({ path: input.path, lcsc: input.lcsc, workspaceRoot }),
             ),
           ),
         [WS_METHODS.hardwareFabExport]: (input) =>

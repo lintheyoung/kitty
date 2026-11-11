@@ -224,6 +224,15 @@ export const hardwareDesignStamp = createEnvironmentRpcCommand(connectionAtomRun
   label: "environment-data:hardware:design-stamp",
   tag: WS_METHODS.hardwareDesignStamp,
 });
+/** JLC's assembly catalogue; every part in a design comes from here. */
+export const hardwareJlcSearch = createEnvironmentRpcCommand(connectionAtomRuntime, {
+  label: "environment-data:hardware:jlc-search",
+  tag: WS_METHODS.hardwareJlcSearch,
+});
+export const hardwareJlcImport = createEnvironmentRpcCommand(connectionAtomRuntime, {
+  label: "environment-data:hardware:jlc-import",
+  tag: WS_METHODS.hardwareJlcImport,
+});
 export const hardwareFabExport = createEnvironmentRpcCommand(connectionAtomRuntime, {
   label: "environment-data:hardware:fab-export",
   tag: WS_METHODS.hardwareFabExport,

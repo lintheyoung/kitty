@@ -52,6 +52,7 @@ import * as ProcessRunner from "../processRunner.ts";
 import { logTail, parseAppBinarySize, parseBuildDiagnostics } from "./buildOutput.ts";
 import { parseEsptoolChipInfo } from "./esptoolOutput.ts";
 import { makeHardwareApprovals } from "./hardwareApprovals.ts";
+import { EASYEDA_CONVERTER_MISSING, easyedaConverterCandidates } from "./jlcParts.ts";
 import { kicadCliCandidates } from "./KicadService.ts";
 import { makeSerialLeases } from "./serialLeases.ts";
 import {
@@ -369,6 +370,30 @@ export const make = Effect.fn("HardwareService.make")(function* () {
     } satisfies HardwareDoctorCheck;
   });
 
+  /** JLC part import needs easyeda2kicad; without it only search works. */
+  const checkJlcParts = Effect.fn("HardwareService.checkJlcParts")(function* (
+    env: NodeJS.ProcessEnv,
+    home: string,
+  ) {
+    for (const command of easyedaConverterCandidates(env, home)) {
+      const result = yield* processRunner
+        .run({ command, args: ["--help"], timeout: "20 seconds" })
+        .pipe(Effect.option);
+      if (Option.isNone(result) || result.value.code !== 0) continue;
+      return {
+        id: "jlc-parts",
+        status: "ok",
+        path: command,
+        detail: "Parts can be imported from JLC.",
+      } satisfies HardwareDoctorCheck;
+    }
+    return {
+      id: "jlc-parts",
+      status: "warning",
+      detail: EASYEDA_CONVERTER_MISSING,
+    } satisfies HardwareDoctorCheck;
+  });
+
   /** The ESP-IDF, venv and boards every operation works with. */
   const resolveToolchain = Effect.fn("HardwareService.resolveToolchain")(function* (
     idfPath?: string,
@@ -388,18 +413,18 @@ export const make = Effect.fn("HardwareService.make")(function* () {
         found[0]);
     const { python, bin } = yield* checkPythonEnv(home, selected);
     const serialPorts = selectSerialPorts(yield* readDirectory("/dev"), platform);
-    return { env, platform, found, selected, python, bin, serialPorts };
+    return { env, home, platform, found, selected, python, bin, serialPorts };
   });
 
   const doctor = Effect.fn("HardwareService.doctor")(function* (input: HardwareDoctorInput) {
-    const { env, platform, found, selected, python, bin, serialPorts } = yield* resolveToolchain(
-      input.idfPath,
-    );
+    const { env, home, platform, found, selected, python, bin, serialPorts } =
+      yield* resolveToolchain(input.idfPath);
     const checks: ReadonlyArray<HardwareDoctorCheck> = [
       checkIdf(selected, found.length),
       python,
       yield* checkEsptool(bin),
       yield* checkKicad(env),
+      yield* checkJlcParts(env, home),
       serialPorts.length > 0
         ? {
             id: "serial",
@@ -420,7 +445,9 @@ export const make = Effect.fn("HardwareService.make")(function* () {
       version: formatVersion(idf.version),
     }));
     return {
-      ok: checks.every((check) => check.id === "serial" || check.status === "ok"),
+      ok: checks.every(
+        (check) => check.id === "serial" || check.id === "jlc-parts" || check.status === "ok",
+      ),
       checks,
       idfInstallations,
       serialPorts,

@@ -558,6 +558,10 @@
     "./kicad/sexprDoc": {
       "types": "./src/kicad/sexprDoc.ts",
       "import": "./src/kicad/sexprDoc.ts"
+    },
+    "./kicad/symbolLibrary": {
+      "types": "./src/kicad/symbolLibrary.ts",
+      "import": "./src/kicad/symbolLibrary.ts"
     }
   },
   "scripts": {

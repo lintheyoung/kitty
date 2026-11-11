@@ -28,6 +28,7 @@ For ESP32 firmware, boards and KiCad designs use the \`hw_*\` and \`kicad_*\` to
 - Start with \`hw_project_inspect\`. Take pins from \`hw_pinmap_sync\`'s pinmap.json or \`kicad_netlist\` with \`component\`, never from memory of a dev board.
 - Firmware loop: edit, \`hw_build\`, fix the first diagnostic, \`hw_pin_check\`, \`hw_flash\`, then \`hw_monitor_read\` with \`until\` to confirm it runs. Say you are about to flash: the user allows it in the Hardware panel.
 - New project: \`hw_chip_info\` for the real flash size, then \`hw_project_create\`. Change configuration with \`hw_sdkconfig_set\`, not by editing sdkconfig.
+- Parts: every part on a board comes from JLC. Find it with \`jlc_part_search\` (prefer basic parts in stock), bring it into the design with \`jlc_part_import\`, and use the \`jlc:\` symbol and footprint it returns. Only power symbols come from KiCad's own libraries.
 - Board design: \`kicad_erc\` / \`kicad_drc\` before \`kicad_fab_export\`; summarize violations by type.`,
 ];
 

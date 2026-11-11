@@ -16,6 +16,7 @@ const CHECK_LABELS: Record<HardwareDoctorCheck["id"], string> = {
   "python-env": "Python environment",
   esptool: "esptool",
   kicad: "KiCad",
+  "jlc-parts": "JLC parts",
   serial: "Board",
 };
 

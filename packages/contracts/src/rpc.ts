@@ -325,6 +325,7 @@ import {
   HardwareProjectsInput,
   HardwareProjectsResult,
   HardwareDesignInput,
+  HardwareJlcImportInput,
   HardwarePreviewInput,
   HardwareProjectTestCreateInput,
   HardwareProjectTestRunInput,
@@ -348,6 +349,7 @@ import {
   KicadDesignStampResult,
   HardwarePinmapSyncResult,
 } from "./kicad.ts";
+import { JlcImportedPart, JlcPartSearchInput, JlcPartSearchResult } from "./jlcParts.ts";
 import {
   ServerConfigStreamEvent,
   DesktopUpdateCommitInput,
@@ -549,6 +551,8 @@ export const WS_METHODS = {
   hardwareDesignSource: "hardware.designSource",
   hardwareBoardModel: "hardware.boardModel",
   hardwareDesignStamp: "hardware.designStamp",
+  hardwareJlcSearch: "hardware.jlcSearch",
+  hardwareJlcImport: "hardware.jlcImport",
   hardwareTestPlans: "hardware.testPlans",
   hardwareTestCreate: "hardware.testCreate",
   hardwareTestRun: "hardware.testRun",
@@ -1876,6 +1880,18 @@ const WsHardwareDesignStampRpc = Rpc.make(WS_METHODS.hardwareDesignStamp, {
   error: Schema.Union([HardwareToolError, EnvironmentAuthorizationError]),
 });
 
+const WsHardwareJlcSearchRpc = Rpc.make(WS_METHODS.hardwareJlcSearch, {
+  payload: JlcPartSearchInput,
+  success: JlcPartSearchResult,
+  error: Schema.Union([HardwareToolError, EnvironmentAuthorizationError]),
+});
+
+const WsHardwareJlcImportRpc = Rpc.make(WS_METHODS.hardwareJlcImport, {
+  payload: HardwareJlcImportInput,
+  success: JlcImportedPart,
+  error: Schema.Union([HardwareToolError, EnvironmentAuthorizationError]),
+});
+
 const WsHardwareFabExportRpc = Rpc.make(WS_METHODS.hardwareFabExport, {
   payload: HardwareDesignInput,
   success: KicadFabExportResult,
@@ -2408,6 +2424,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsHardwareDesignSourceRpc,
   WsHardwareBoardModelRpc,
   WsHardwareDesignStampRpc,
+  WsHardwareJlcSearchRpc,
+  WsHardwareJlcImportRpc,
   WsHardwareTestPlansRpc,
   WsHardwareTestCreateRpc,
   WsHardwareTestRunRpc,

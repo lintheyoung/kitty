@@ -2,6 +2,7 @@ import { HardwareToolError } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 
 import * as HardwareService from "../../../hardware/HardwareService.ts";
+import * as JlcPartsService from "../../../hardware/JlcPartsService.ts";
 import * as KicadService from "../../../hardware/KicadService.ts";
 import { createBoardTest, runBoardTests } from "../../../hardware/boardTestRunner.ts";
 import { createHardwareRepo } from "../../../hardware/newHardwareProject.ts";
@@ -134,6 +135,18 @@ export const layer = McpToolAccess.toLayer(HardwareToolkit, {
     Effect.gen(function* () {
       const kicad = yield* KicadService.KicadService;
       return yield* kicad.fabExport({ ...input, workspaceRoot: yield* callerWorkspaceRoot() });
+    }),
+  ),
+  jlc_part_search: McpToolAccess.actsAsCaller((input) =>
+    Effect.gen(function* () {
+      const jlc = yield* JlcPartsService.JlcPartsService;
+      return yield* jlc.search(input);
+    }),
+  ),
+  jlc_part_import: McpToolAccess.actsAsCaller((input) =>
+    Effect.gen(function* () {
+      const jlc = yield* JlcPartsService.JlcPartsService;
+      return yield* jlc.importPart({ ...input, workspaceRoot: yield* callerWorkspaceRoot() });
     }),
   ),
   hw_project_inspect: McpToolAccess.actsAsCaller((input) =>
