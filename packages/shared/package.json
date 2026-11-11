@@ -554,6 +554,10 @@
     "./kicad/pick": {
       "types": "./src/kicad/pick.ts",
       "import": "./src/kicad/pick.ts"
+    },
+    "./kicad/sexprDoc": {
+      "types": "./src/kicad/sexprDoc.ts",
+      "import": "./src/kicad/sexprDoc.ts"
     }
   },
   "scripts": {
