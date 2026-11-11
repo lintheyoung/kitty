@@ -20,6 +20,8 @@ export type SchematicEdit =
       readonly mirror?: Mirror | undefined;
       readonly reference?: string | undefined;
       readonly value?: string | undefined;
+      /** The block the part belongs to ("Power", "USB"); parts of a block are kept together. */
+      readonly group?: string | undefined;
       /** Net for each pin number: a short wire and a label or power symbol. */
       readonly nets?: Readonly<Record<string, string>> | undefined;
       /** Pin numbers that are left unconnected on purpose. */
@@ -102,6 +104,11 @@ const TEXT = 1.27;
 // The drawing area of an A4 sheet, clear of the frame and the title block.
 const PAGE: Box = { minX: 25.4, minY: 25.4, maxX: 270, maxY: 160 };
 const SPACING = 5.08;
+/** The symbol field that names the block a part belongs to. */
+const GROUP_PROPERTY = "Group";
+/** Clear space kept between one block and the next. */
+const GROUP_GAP = 25.4;
+const TITLE = 2.54;
 
 type List = Array<Node>;
 const isList = (node: Node | undefined): node is List => Array.isArray(node);
@@ -292,6 +299,7 @@ function addSymbolNode(
     readonly mirror: Mirror | undefined;
     readonly reference: string;
     readonly value: string | undefined;
+    readonly group?: string | undefined;
   },
 ): List {
   const library = embedded(session, input.libId);
@@ -326,6 +334,17 @@ function addSymbolNode(
       if (sideways) at[3] = num(at[3]) % 180 === 0 ? "90" : "0";
     }
     node.push(copy);
+  }
+  if (input.group) {
+    // The block a part belongs to travels with it, out of sight.
+    node.push([
+      "property",
+      quoted(GROUP_PROPERTY),
+      quoted(input.group),
+      ["at", numeric(input.at.x), numeric(input.at.y), "0"],
+      ["hide", "yes"],
+      ["effects", ["font", ["size", "1.27", "1.27"]]],
+    ]);
   }
   const numbers = new Set(libraryPins(library).map((pin) => pin.number));
   for (const number of numbers) {
@@ -519,28 +538,105 @@ function freeSpot(box: Box, taken: ReadonlyArray<Box>): Point {
   );
 }
 
+/** How far apart two boxes are; 0 when they touch or overlap. */
+const gap = (a: Box, b: Box) =>
+  Math.max(0, a.minX - b.maxX, b.minX - a.maxX) + Math.max(0, a.minY - b.maxY, b.minY - a.maxY);
+/**
+ * A free spot for a part of a block: beside the block's other parts, or, for
+ * the first part of a block, clear of the other blocks.
+ */
+function groupSpot(
+  box: Box,
+  taken: ReadonlyArray<Box>,
+  own: Box | undefined,
+  others: ReadonlyArray<Box>,
+): Point {
+  const step = 2 * GRID;
+  let best: Point | undefined;
+  let bestScore = Infinity;
+  for (let y = snap(PAGE.minY - box.minY); y + box.maxY <= PAGE.maxY; y += step) {
+    for (let x = snap(PAGE.minX - box.minX); x + box.maxX <= PAGE.maxX; x += step) {
+      const candidate = shifted(box, { x, y });
+      if (taken.some((other) => overlaps(candidate, other))) continue;
+      const crowding = others.some((other) => gap(candidate, other) < GROUP_GAP) ? 1e6 : 0;
+      const score = crowding + (own ? gap(candidate, own) : 0);
+      if (score < bestScore) {
+        bestScore = score;
+        best = { x: snap(x), y: snap(y) };
+      }
+      // A new block takes the first clear spot, reading the sheet in rows.
+      if (!own && score === 0) return best ?? { x: snap(x), y: snap(y) };
+    }
+  }
+  if (best) return best;
+  throw refuse(
+    "The sheet has no free space for this part. Remove parts or give a position with `at`.",
+  );
+}
+
+/** The area a placed symbol takes, without its connections. */
+function symbolBox(session: Session, symbol: List): Box {
+  const cache = find(session.root, "lib_symbols") ?? [];
+  const libId = text(find(symbol, "lib_id")?.[1]);
+  const library = all(cache, "symbol").find((entry) => text(entry[1]) === libId);
+  const rotation = num(find(symbol, "at")?.[3]);
+  return shifted(
+    library
+      ? footprintBox(library, rotation, mirrorOf(symbol), {})
+      : { minX: -STUB, minY: -STUB, maxX: STUB, maxY: STUB },
+    positionOf(symbol),
+  );
+}
+
+/** The area each block's parts cover. */
+function groupAreas(session: Session): Map<string, Box> {
+  const areas = new Map<string, Box>();
+  for (const symbol of sheetSymbols(session.root)) {
+    const group = text(propertyOf(symbol, GROUP_PROPERTY)?.[2]);
+    if (!group) continue;
+    const box = symbolBox(session, symbol);
+    const area = areas.get(group);
+    areas.set(
+      group,
+      area
+        ? {
+            minX: Math.min(area.minX, box.minX),
+            minY: Math.min(area.minY, box.minY),
+            maxX: Math.max(area.maxX, box.maxX),
+            maxY: Math.max(area.maxY, box.maxY),
+          }
+        : box,
+    );
+  }
+  return areas;
+}
+
+/** The block's name written above its first part. */
+function addGroupTitle(session: Session, group: string, box: Box): void {
+  const at = { x: snap(box.minX), y: snap(box.minY - SPACING) };
+  insert(session, [
+    "text",
+    quoted(group),
+    ["exclude_from_sim", "no"],
+    ["at", numeric(at.x), numeric(at.y), "0"],
+    ["effects", ["font", ["size", numeric(TITLE), numeric(TITLE)]], ["justify", "left", "bottom"]],
+    ["uuid", quoted(session.context.uuid())],
+  ]);
+}
+
 /** Rough boxes of what is already on the sheet. */
 function occupied(session: Session): ReadonlyArray<Box> {
   const boxes: Array<Box> = [...session.added];
-  const cache = find(session.root, "lib_symbols") ?? [];
-  for (const symbol of sheetSymbols(session.root)) {
-    const libId = text(find(symbol, "lib_id")?.[1]);
-    const library = all(cache, "symbol").find((entry) => text(entry[1]) === libId);
-    const at = positionOf(symbol);
-    const rotation = num(find(symbol, "at")?.[3]);
-    boxes.push(
-      shifted(
-        library
-          ? footprintBox(library, rotation, mirrorOf(symbol), {})
-          : {
-              minX: -STUB,
-              minY: -STUB,
-              maxX: STUB,
-              maxY: STUB,
-            },
-        at,
-      ),
-    );
+  for (const symbol of sheetSymbols(session.root)) boxes.push(symbolBox(session, symbol));
+  for (const note of all(session.root, "text")) {
+    const at = positionOf(note);
+    const size = num(find(find(find(note, "effects") ?? [], "font") ?? [], "size")?.[1]) || TEXT;
+    boxes.push({
+      minX: at.x,
+      minY: at.y - size * 1.5,
+      maxX: at.x + text(note[1]).length * size,
+      maxY: at.y,
+    });
   }
   for (const wire of all(session.root, "wire")) {
     const points = all(find(wire, "pts") ?? [], "xy").map((point) => ({
@@ -614,9 +710,22 @@ function place(
   const rotation = turns(edit.rotation ?? 0) * 90;
   const nets = edit.nets ?? {};
   const box = footprintBox(library, rotation, edit.mirror, nets);
+  const group = edit.group?.trim() || undefined;
+  const areas = groupAreas(session);
+  const own = group ? areas.get(group) : undefined;
+  // Room above the first part of a block for the block's name.
+  const roomy = group && !own ? { ...box, minY: box.minY - SPACING - TITLE * 1.5 } : box;
   const at = edit.at
     ? { x: snap(edit.at.x), y: snap(edit.at.y) }
-    : freeSpot(box, occupied(session));
+    : group
+      ? groupSpot(
+          roomy,
+          occupied(session),
+          own,
+          [...areas].filter(([name]) => name !== group).map(([, area]) => area),
+        )
+      : freeSpot(box, occupied(session));
+  if (group && !own) addGroupTitle(session, group, shifted(box, at));
   const prefix = (text(propertyOf(library, "Reference")?.[2]) || "U").replace(/[?\d]+$/, "") || "U";
   const reference = edit.reference?.trim() || nextReference(session, prefix);
   if (sheetSymbols(session.root).some((symbol) => referenceOf(symbol) === reference)) {
@@ -631,6 +740,7 @@ function place(
     mirror: edit.mirror,
     reference,
     value: edit.value,
+    group,
   });
   const pins = placedPins(library, at, rotation, edit.mirror);
   const unused = edit.noConnectRest

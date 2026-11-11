@@ -122,6 +122,44 @@ describe("schematic edits", () => {
     }
   });
 
+  it("keeps the parts of a block together and the blocks apart", () => {
+    const part = (group: string) => ({
+      op: "place" as const,
+      symbol: "jlc:R",
+      group,
+      nets: { "1": "+3V3", "2": "GND" },
+    });
+    const first = applySchematicEdits(BLANK, [part("Power"), part("MCU")], context());
+    // More parts arrive later, in any order; each joins its own block.
+    const result = applySchematicEdits(
+      first.source,
+      [part("Power"), part("MCU"), part("Power"), part("MCU")],
+      {
+        ...context(),
+        uuid: (
+          (n) => () =>
+            `00000000-0000-0000-0001-${String(++n).padStart(12, "0")}`
+        )(0),
+      },
+    );
+    const at = Object.fromEntries(
+      [...first.placed, ...result.placed].map((placed) => [placed.reference, placed.at]),
+    );
+    const far = (a: string, b: string) =>
+      Math.hypot((at[a]?.x ?? 0) - (at[b]?.x ?? 0), (at[a]?.y ?? 0) - (at[b]?.y ?? 0));
+    const power = ["R1", "R3", "R5"];
+    const mcu = ["R2", "R4", "R6"];
+    for (const a of power) {
+      const nearestOwn = Math.min(...power.filter((b) => b !== a).map((b) => far(a, b)));
+      const nearestOther = Math.min(...mcu.map((b) => far(a, b)));
+      expect(nearestOwn).toBeLessThan(nearestOther);
+    }
+    // Each block is named once on the sheet, and every part remembers its block.
+    expect(result.source.split('(text "Power"').length - 1).toBe(1);
+    expect(result.source.split('(text "MCU"').length - 1).toBe(1);
+    expect(result.source.split('(property "Group" "Power"').length - 1).toBe(3);
+  });
+
   it("moves a part with its connections and removes them with the part", () => {
     const placed = applySchematicEdits(
       BLANK,

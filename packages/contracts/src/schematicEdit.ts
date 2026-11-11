@@ -27,6 +27,12 @@ export const SchematicEdit = Schema.Union([
     value: Schema.optional(
       Schema.String.annotate({ description: 'Shown next to the part, e.g. "10k".' }),
     ),
+    group: Schema.optional(
+      Schema.String.annotate({
+        description:
+          'The block the part belongs to, e.g. "Power" or "USB". Parts of a block are placed together under its name.',
+      }),
+    ),
     nets: Schema.optional(PinNets),
     noConnect: Schema.optional(Schema.Array(Schema.String)),
     noConnectRest: Schema.optional(
