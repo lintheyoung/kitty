@@ -273,8 +273,14 @@ function OutcomeView(props: { readonly outcome: Outcome }) {
           {outcome.fab.zip ? (
             <span className="font-mono text-2xs break-all">Upload: {outcome.fab.zip}</span>
           ) : null}
-          {outcome.fab.positions ? (
-            <span className="font-mono text-2xs break-all">Positions: {outcome.fab.positions}</span>
+          {outcome.fab.bom ? (
+            <span className="font-mono text-2xs break-all">BOM: {outcome.fab.bom}</span>
+          ) : null}
+          {outcome.fab.cpl ? (
+            <span className="font-mono text-2xs break-all">Placement: {outcome.fab.cpl}</span>
+          ) : null}
+          {outcome.fab.unsourced.length > 0 ? (
+            <span>No LCSC number: {outcome.fab.unsourced.join(", ")}</span>
           ) : null}
         </div>
       );

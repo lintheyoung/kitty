@@ -31,8 +31,7 @@ describe("designSteps", () => {
       "2 errors",
       "Files for JLC",
     ]);
-    // Routing is not something the agent can do yet.
-    expect(steps.filter((step) => !step.prompt).map((step) => step.id)).toEqual(["routing"]);
+    expect(steps.every((step) => step.prompt)).toBe(true);
     const waiting = designSteps({ parts: 5, footprints: 5, tracks: 0 }, "x");
     expect(waiting[2]?.status).toBe("No board outline yet");
   });

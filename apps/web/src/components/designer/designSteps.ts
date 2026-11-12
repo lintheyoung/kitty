@@ -71,6 +71,7 @@ export function designSteps(facts: DesignFacts, design: string): ReadonlyArray<D
           : unrouted
             ? `${plural(unrouted, "connection")} left`
             : plural(tracks, "track"),
+      prompt: `Route ${design}: keep copper out from under any antenna, run the auto-router, then finish what it leaves by hand and tell me what you did.`,
     },
     {
       id: "checks",

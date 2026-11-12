@@ -328,7 +328,7 @@ const KicadBomTool = Tool.make("kicad_bom", {
 
 const KicadFabExportTool = Tool.make("kicad_fab_export", {
   description:
-    "Export a board's fabrication files: Gerbers for every copper layer plus mask, paste, silkscreen and outline, Excellon drill, a CSV position file, and a zip of Gerbers + drill ready to upload to a PCB fab. Run kicad_drc first.",
+    "Export what JLC needs to make and assemble a board: a zip of Gerbers and drill files to upload for the PCB, plus the BOM (`bom`) and placement file (`cpl`) in JLC's columns for assembly. It runs DRC first and refuses while there are errors or unrouted connections; fix those rather than passing `force`. `unsourced` lists parts with no LCSC number, which JLC cannot fit. Tell the user which file goes where on JLC's order page, and to check part orientation in JLC's placement preview.",
   parameters: KicadFabExportInput,
   success: KicadFabExportResult,
   failure: HardwareFailure,

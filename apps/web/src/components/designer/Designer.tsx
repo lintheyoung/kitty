@@ -20,6 +20,7 @@ import {
   RefreshCwIcon,
   RotateCcwIcon,
   Trash2Icon,
+  FileArchiveIcon,
   UndoIcon,
   WaypointsIcon,
   ShieldCheckIcon,
@@ -40,6 +41,7 @@ import {
   hardwareBoardSync,
   hardwareDesigns,
   hardwareDesignSource,
+  hardwareFabExport,
 } from "../../state/hardware";
 import { formatEnvironmentQueryError, useEnvironmentQuery } from "../../state/query";
 import { Button } from "../ui/button";
@@ -898,6 +900,27 @@ function DesignerView(props: {
     }
   };
 
+  /** Writes the files JLC needs; held back while the board has errors or missing tracks. */
+  const exportOrder = async () => {
+    if (!project || sync.busy) return;
+    setSync({ busy: true, note: "Checking the board and writing the order files…" });
+    const result = await runAtomCommand(
+      appAtomRegistry,
+      hardwareFabExport,
+      { environmentId, input: { ...target, path: project } },
+      { reportFailure: false },
+    );
+    if (result._tag === "Success") {
+      const { zip, bom, cpl, unsourced, outputDir } = result.value;
+      const files = [zip, bom, cpl].filter((file) => file !== undefined).length;
+      const missing =
+        unsourced.length > 0 ? ` No LCSC number yet: ${unsourced.slice(0, 8).join(", ")}.` : "";
+      setSync({ busy: false, note: `Wrote ${files} files for JLC to ${outputDir}.${missing}` });
+    } else {
+      setSync({ busy: false, note: formatEnvironmentQueryError(result.cause), failed: true });
+    }
+  };
+
   const pick = (item: SceneItem | undefined) => {
     setReveal(undefined);
     if (!item || !scene) return setSelection(undefined);
@@ -1030,6 +1053,17 @@ function DesignerView(props: {
           >
             <WaypointsIcon className={cn(sync.routing && "animate-pulse")} />
             Auto-route
+          </Button>
+        ) : null}
+        {boardEditable && boardWires.length === 0 && scene.items.length > 0 ? (
+          <Button
+            size="xs"
+            variant="ghost-muted"
+            disabled={sync.busy || editor.busy}
+            onClick={() => void exportOrder()}
+          >
+            <FileArchiveIcon />
+            Order files
           </Button>
         ) : null}
         {boardEditable && wiring ? (

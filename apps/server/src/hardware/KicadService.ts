@@ -72,6 +72,7 @@ import {
   parseAutorouteReport,
   pickFreeroutingJar,
 } from "./boardAutoroute.ts";
+import { jlcBomCsv, jlcCplCsv, orderBlockers } from "./jlcFiles.ts";
 import { BOARD_EDIT_SCRIPT, boardEditJob, boardRouting, parseBoardReport } from "./boardEdit.ts";
 import {
   BOARD_SYNC_SCRIPT,
@@ -797,6 +798,22 @@ export const make = Effect.fn("KicadService.make")(function* () {
         ? manufacturing
         : path.join(path.dirname(file), "fab");
     const cli = yield* findCli();
+    // A board with errors or missing tracks would be made as it is, so it is held back.
+    const checked = yield* drc({
+      workspaceRoot: input.workspaceRoot,
+      path: input.path,
+      schematicParity: false,
+    });
+    const blockers = orderBlockers({
+      errors: checked.summary.errors,
+      unconnected: checked.unconnected.length,
+    });
+    if (blockers.length > 0 && !input.force) {
+      return yield* failure(
+        "invalid_argument",
+        `${relative} is not ready to order: ${blockers.join(", ")}. Run kicad_drc to see them and fix them first.`,
+      );
+    }
     const board = yield* fs
       .readFileString(file)
       .pipe(Effect.mapError((cause) => failure("command_failed", cause.message)));
@@ -886,9 +903,32 @@ export const make = Effect.fn("KicadService.make")(function* () {
       })
       .pipe(Effect.option);
     const rel = (target: string) => path.relative(input.workspaceRoot, target);
+    const write = (target: string, text: string) =>
+      fs.writeFileString(target, text).pipe(
+        Effect.as(rel(target)),
+        Effect.mapError((cause) => failure("command_failed", cause.message)),
+      );
+    const cpl = yield* fs.readFileString(positions).pipe(
+      Effect.mapError((cause) => failure("command_failed", cause.message)),
+      Effect.flatMap((text) => write(path.join(outputDir, `${stem}-jlc-cpl.csv`), jlcCplCsv(text))),
+    );
+    // The BOM comes from the schematic beside the board; a board alone has none.
+    const parts = yield* readNetlist(input.workspaceRoot, path.dirname(relative)).pipe(
+      Effect.map(({ netlist: parsed }) => buildBom(parsed.components, false)),
+      Effect.option,
+    );
+    const bom = Option.isSome(parts)
+      ? yield* write(path.join(outputDir, `${stem}-jlc-bom.csv`), jlcBomCsv(parts.value.lines))
+      : undefined;
     return {
       board: relative,
       outputDir: rel(outputDir),
+      cpl,
+      ...(bom ? { bom } : {}),
+      unsourced: Option.isSome(parts)
+        ? parts.value.lines.filter((line) => !line.dnp && !line.lcsc).flatMap((line) => line.refs)
+        : [],
+      blockers: [...blockers],
       gerbers: gerbers.map((entry) => rel(path.join(gerberDir, entry))),
       drill: drill.map((entry) => rel(path.join(gerberDir, entry))),
       positions: rel(positions),

@@ -464,6 +464,11 @@ export const KicadFabExportInput = Schema.Struct({
       description: "Output directory relative to the workspace. Default `fab/` next to the board.",
     }),
   ),
+  force: Schema.optional(
+    Schema.Boolean.annotate({
+      description: "Export even though DRC finds errors or unrouted connections. Default false.",
+    }),
+  ),
 });
 export type KicadFabExportInput = typeof KicadFabExportInput.Type;
 
@@ -475,6 +480,13 @@ export const KicadFabExportResult = Schema.Struct({
   positions: Schema.optional(Schema.String),
   /** Gerbers + drill in one zip, ready to upload to a PCB fab. */
   zip: Schema.optional(Schema.String),
+  /** JLC assembly: the bill of materials and the placement file. */
+  bom: Schema.optional(Schema.String),
+  cpl: Schema.optional(Schema.String),
+  /** Parts with no LCSC number, which JLC cannot fit as they are. */
+  unsourced: Schema.Array(Schema.String),
+  /** What DRC still finds; only non-empty when the export was forced. */
+  blockers: Schema.Array(Schema.String),
 });
 export type KicadFabExportResult = typeof KicadFabExportResult.Type;
 
