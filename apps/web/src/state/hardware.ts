@@ -252,6 +252,11 @@ export const hardwareBoardSync = createEnvironmentRpcCommand(connectionAtomRunti
   label: "environment-data:hardware:board-sync",
   tag: WS_METHODS.hardwareBoardSync,
 });
+/** Routes the whole board with the auto-router. */
+export const hardwareBoardAutoroute = createEnvironmentRpcCommand(connectionAtomRuntime, {
+  label: "environment-data:hardware:board-autoroute",
+  tag: WS_METHODS.hardwareBoardAutoroute,
+});
 /** Moves parts on the board and sets its outline; the same edits the agent's pcb_edit makes. */
 export const hardwareBoardEdit = createEnvironmentRpcCommand(connectionAtomRuntime, {
   label: "environment-data:hardware:board-edit",

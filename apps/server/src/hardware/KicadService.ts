@@ -1,6 +1,8 @@
 import {
   type BoardEditInput,
   type BoardEditResult,
+  type BoardAutorouteInput,
+  type BoardAutorouteResult,
   type BoardSyncInput,
   type BoardSyncResult,
   HardwareToolError,
@@ -60,6 +62,16 @@ import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as SchemaIssue from "effect/SchemaIssue";
 
 import * as ProcessRunner from "../processRunner.ts";
+import {
+  AUTOROUTE_SCRIPT,
+  autorouteJob,
+  FREEROUTING_FOLDERS,
+  FREEROUTING_MISSING,
+  freeroutingArgs,
+  javaCandidates,
+  parseAutorouteReport,
+  pickFreeroutingJar,
+} from "./boardAutoroute.ts";
 import { BOARD_EDIT_SCRIPT, boardEditJob, boardRouting, parseBoardReport } from "./boardEdit.ts";
 import {
   BOARD_SYNC_SCRIPT,
@@ -169,6 +181,9 @@ export class KicadService extends Context.Service<
       input: InWorkspace<BoardEditInput> & { readonly by?: SchematicChangeAuthor },
     ) => Effect.Effect<BoardEditResult, HardwareToolError>;
     /** Brings the schematic's parts and nets onto the board. */
+    readonly boardAutoroute: (
+      input: InWorkspace<BoardAutorouteInput> & { readonly by?: SchematicChangeAuthor },
+    ) => Effect.Effect<BoardAutorouteResult, HardwareToolError>;
     readonly boardSync: (
       input: InWorkspace<BoardSyncInput> & { readonly by?: SchematicChangeAuthor },
     ) => Effect.Effect<BoardSyncResult, HardwareToolError>;
@@ -528,6 +543,114 @@ export const make = Effect.fn("KicadService.make")(function* () {
       unrouted: routing.unrouted,
       ...(input.nets ? { nets: [...routing.nets] } : {}),
     } satisfies BoardEditResult;
+  });
+
+  /** Java and the Freerouting jar, looked for once. */
+  let knownRouter: { readonly java: string; readonly jar: string } | undefined;
+  const findRouter = Effect.fn("KicadService.findRouter")(function* () {
+    if (knownRouter) return knownRouter;
+    const env = yield* HostProcess.Environment;
+    const home = yield* HostProcess.HomeDirectory;
+    let jar = env.KITTY_FREEROUTING_JAR?.trim() || undefined;
+    for (const folder of jar ? [] : FREEROUTING_FOLDERS) {
+      const directory = path.join(home, folder);
+      const files = yield* fs.readDirectory(directory).pipe(Effect.option);
+      const found = pickFreeroutingJar(Option.getOrElse(files, () => []));
+      if (found) {
+        jar = path.join(directory, found);
+        break;
+      }
+    }
+    if (!jar) return yield* failure("toolchain_missing", FREEROUTING_MISSING);
+    for (const java of javaCandidates(env)) {
+      const result = yield* processRunner
+        .run({ command: java, args: ["-version"], timeout: "15 seconds" })
+        .pipe(Effect.option);
+      if (Option.isSome(result) && result.value.code === 0) {
+        knownRouter = { java, jar };
+        return knownRouter;
+      }
+    }
+    return yield* failure("toolchain_missing", FREEROUTING_MISSING);
+  });
+
+  const boardAutoroute = Effect.fn("KicadService.boardAutoroute")(function* (
+    input: InWorkspace<BoardAutorouteInput> & { readonly by?: SchematicChangeAuthor },
+  ) {
+    const { file, relative } = yield* resolveDesign(input.workspaceRoot, input.path, ".kicad_pcb");
+    const directory = path.dirname(file);
+    const before = yield* fs
+      .readFileString(file)
+      .pipe(Effect.mapError((cause) => failure("invalid_path", cause.message)));
+    const router = yield* findRouter();
+    const passes = Math.max(1, Math.min(100, input.passes ?? 20));
+    const report = yield* Effect.scoped(
+      Effect.gen(function* () {
+        const temp = yield* fs
+          .makeTempDirectoryScoped({ prefix: "kitty-route-" })
+          .pipe(Effect.mapError((cause) => failure("command_failed", cause.message)));
+        const dsn = path.join(temp, "board.dsn");
+        const ses = path.join(temp, "board.ses");
+        const step = (mode: "export" | "import") =>
+          runKicadPython(
+            AUTOROUTE_SCRIPT,
+            autorouteJob({ mode, board: file, dsn, ses }),
+            directory,
+          ).pipe(
+            Effect.flatMap((stdout) => {
+              const parsed = parseAutorouteReport(stdout);
+              if (!parsed) return failure("command_failed", boardUntouched(stdout));
+              return "error" in parsed
+                ? failure("invalid_argument", parsed.error)
+                : Effect.succeed(parsed);
+            }),
+          );
+        yield* step("export");
+        const run = yield* processRunner
+          .run({
+            command: router.java,
+            args: freeroutingArgs(router.jar, dsn, ses, passes),
+            cwd: temp,
+            timeout: "10 minutes",
+            outputMode: "truncate",
+            timeoutBehavior: "timedOutResult",
+          })
+          .pipe(Effect.mapError((cause) => failure("command_failed", cause.message)));
+        if (!(yield* fs.exists(ses).pipe(Effect.orElseSucceed(() => false)))) {
+          return yield* failure(
+            "command_failed",
+            `The auto-router gave no result, so the board was left as it was.\n${logTail(`${run.stdout}\n${run.stderr}`, 8)}`,
+          );
+        }
+        return yield* step("import");
+      }),
+    );
+    const after = yield* fs
+      .readFileString(file)
+      .pipe(Effect.mapError((cause) => failure("command_failed", cause.message)));
+    const routing = yield* parseOrFail(() => boardRouting(after), "board");
+    const left =
+      routing.unrouted === 0
+        ? "every connection joined"
+        : `${routing.unrouted} connection${routing.unrouted === 1 ? "" : "s"} left`;
+    const summary = [
+      `Auto-routed the board: ${report.tracks} tracks, ${report.vias} vias, ${left}`,
+    ];
+    const history = historyOf(file, before);
+    history.undo.push({ source: before, summary });
+    if (history.undo.length > HISTORY_LIMIT) history.undo.shift();
+    history.redo.length = 0;
+    history.current = after;
+    yield* recordChange(directory, input.by ?? "agent", summary);
+    return {
+      board: relative,
+      summary,
+      tracks: report.tracks,
+      vias: report.vias,
+      narrow: report.narrow,
+      toRoute: [...routing.toRoute],
+      unrouted: routing.unrouted,
+    } satisfies BoardAutorouteResult;
   });
 
   const boardSync = Effect.fn("KicadService.boardSync")(function* (
@@ -1620,6 +1743,7 @@ export const make = Effect.fn("KicadService.make")(function* () {
     schematicChanges,
     schematicHistory,
     schematicReview,
+    boardAutoroute,
     boardSync,
     boardEdit,
     upgradeLibraries,

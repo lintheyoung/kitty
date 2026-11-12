@@ -21,6 +21,7 @@ import {
   RotateCcwIcon,
   Trash2Icon,
   UndoIcon,
+  WaypointsIcon,
   ShieldCheckIcon,
   SparklesIcon,
   XIcon,
@@ -34,7 +35,12 @@ import { cn } from "~/lib/utils";
 import { runAtomCommand } from "@t3tools/client-runtime/state/runtime";
 
 import { appAtomRegistry } from "../../rpc/atomRegistry";
-import { hardwareBoardSync, hardwareDesigns, hardwareDesignSource } from "../../state/hardware";
+import {
+  hardwareBoardAutoroute,
+  hardwareBoardSync,
+  hardwareDesigns,
+  hardwareDesignSource,
+} from "../../state/hardware";
 import { formatEnvironmentQueryError, useEnvironmentQuery } from "../../state/query";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -592,7 +598,12 @@ function DesignerView(props: {
   const [routeLayer, setRouteLayer] = useState<"F.Cu" | "B.Cu">("F.Cu");
   const [showSize, setShowSize] = useState(false);
   const [activeProblem, setActiveProblem] = useState<string | undefined>();
-  const [sync, setSync] = useState<{ busy: boolean; note?: string; failed?: boolean }>({
+  const [sync, setSync] = useState<{
+    busy: boolean;
+    note?: string;
+    failed?: boolean;
+    routing?: boolean;
+  }>({
     busy: false,
   });
 
@@ -866,6 +877,27 @@ function DesignerView(props: {
     }
   };
 
+  /** Lets the auto-router draw every track it can. */
+  const autoroute = async () => {
+    if (!project || sync.busy) return;
+    setSync({ busy: true, routing: true, note: "Routing the board. This can take a minute…" });
+    const result = await runAtomCommand(
+      appAtomRegistry,
+      hardwareBoardAutoroute,
+      { environmentId, input: { ...target, path: project } },
+      { reportFailure: false },
+    );
+    if (result._tag === "Success") {
+      const { narrow, summary } = result.value;
+      const thin = narrow > 0 ? ` ${narrow} tracks are thinner than the board allows.` : "";
+      setSync({ busy: false, note: `${summary.join(" ")}.${thin}` });
+      loaded.refresh();
+      if (checked) void runChecks();
+    } else {
+      setSync({ busy: false, note: formatEnvironmentQueryError(result.cause), failed: true });
+    }
+  };
+
   const pick = (item: SceneItem | undefined) => {
     setReveal(undefined);
     if (!item || !scene) return setSelection(undefined);
@@ -989,6 +1021,17 @@ function DesignerView(props: {
             {boardEditable ? "Route" : "Wire"}
           </Button>
         ) : null}
+        {boardEditable && boardWires.length > 0 ? (
+          <Button
+            size="xs"
+            variant="ghost-muted"
+            disabled={sync.busy || editor.busy}
+            onClick={() => void autoroute()}
+          >
+            <WaypointsIcon className={cn(sync.routing && "animate-pulse")} />
+            Auto-route
+          </Button>
+        ) : null}
         {boardEditable && wiring ? (
           <Button
             size="xs"
@@ -1018,8 +1061,8 @@ function DesignerView(props: {
             disabled={sync.busy}
             onClick={() => void syncBoard()}
           >
-            <ArrowRightToLineIcon className={cn(sync.busy && "animate-pulse")} />
-            {sync.busy ? "Updating…" : "Update from schematic"}
+            <ArrowRightToLineIcon className={cn(sync.busy && !sync.routing && "animate-pulse")} />
+            {sync.busy && !sync.routing ? "Updating…" : "Update from schematic"}
           </Button>
         ) : null}
         {boardEditable ? (

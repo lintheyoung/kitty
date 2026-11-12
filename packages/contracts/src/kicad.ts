@@ -361,6 +361,33 @@ export const BoardEditResult = Schema.Struct({
 });
 export type BoardEditResult = typeof BoardEditResult.Type;
 
+export const BoardAutorouteInput = Schema.Struct({
+  path: Schema.String.annotate({
+    description: "The design: its .kicad_pcb, .kicad_pro or directory, relative to the workspace.",
+  }),
+  passes: Schema.optional(
+    Schema.Int.annotate({
+      description: "How many tries the router gets, 1 to 100; 20 when absent.",
+    }),
+  ),
+});
+export type BoardAutorouteInput = typeof BoardAutorouteInput.Type;
+
+export const BoardAutorouteResult = Schema.Struct({
+  board: Schema.String,
+  summary: Schema.Array(Schema.String),
+  tracks: Schema.Int,
+  vias: Schema.Int,
+  /** Tracks left thinner than the board allows; DRC lists them. */
+  narrow: Schema.Int,
+  /** Pairs of pads the router could not join. */
+  toRoute: Schema.Array(
+    Schema.Struct({ net: Schema.String, from: Schema.String, to: Schema.String }),
+  ),
+  unrouted: Schema.Int,
+});
+export type BoardAutorouteResult = typeof BoardAutorouteResult.Type;
+
 /** The text of one design file, for the client to draw. */
 export const KicadDesignFile = Schema.Struct({
   /** Sheet name, or "Board". */

@@ -45,6 +45,8 @@ import {
   KicadBomResult,
   BoardEditInput,
   BoardEditResult,
+  BoardAutorouteInput,
+  BoardAutorouteResult,
   BoardSyncInput,
   BoardSyncResult,
   KicadDrcInput,
@@ -283,6 +285,19 @@ const BoardEditTool = Tool.make("pcb_edit", {
   .annotate(Tool.Idempotent, false)
   .annotate(Tool.OpenWorld, false);
 
+const BoardAutorouteTool = Tool.make("pcb_autoroute", {
+  description:
+    "Route the whole board with the auto-router (Freerouting). Use it once the outline is set and every part is placed inside it without overlaps; it takes seconds to minutes. Tracks already on the board may be redrawn. The reply gives the tracks and vias drawn and `toRoute`, the pad pairs it could not join: finish those with `pcb_edit`, or move parts apart and route again. Run `kicad_drc` afterwards.",
+  parameters: BoardAutorouteInput,
+  success: BoardAutorouteResult,
+  failure: HardwareFailure,
+  dependencies: kicadDependencies,
+})
+  .annotate(Tool.Title, "Auto-route board")
+  .annotate(Tool.Destructive, false)
+  .annotate(Tool.Idempotent, false)
+  .annotate(Tool.OpenWorld, false);
+
 const KicadNetlistTool = Tool.make("kicad_netlist", {
   description:
     "Read a schematic's components and connections. Pass component (e.g. U1) to get that part's pin-to-net table: use it to learn which MCU GPIO connects to which sensor, LED or button before writing firmware.",
@@ -483,6 +498,7 @@ export const HardwareToolkit = Toolkit.make(
   KicadErcTool,
   KicadDrcTool,
   BoardSyncTool,
+  BoardAutorouteTool,
   BoardEditTool,
   KicadNetlistTool,
   KicadBomTool,
