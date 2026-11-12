@@ -234,6 +234,66 @@ describe("schematic edits", () => {
     ).toThrow(SchematicEditError);
   });
 
+  it("wires the small parts of a block together where they share a net", () => {
+    const part = (group: string, nets: Record<string, string>) => ({
+      op: "place" as const,
+      symbol: "jlc:R",
+      group,
+      nets,
+    });
+    const drawn = applySchematicEdits(
+      BLANK,
+      [
+        part("Buttons", { "1": "+3V3", "2": "EN" }),
+        part("Buttons", { "1": "EN", "2": "GND" }),
+        part("Buttons", { "1": "GND", "2": "EN" }),
+        part("MCU", { "1": "+3V3", "2": "GND" }),
+        part("MCU", { "1": "GND", "2": "+3V3" }),
+        part("MCU", { "1": "IO4", "2": "IO5" }),
+      ],
+      context(),
+    );
+    const again = () => ({
+      ...context(),
+      uuid: (
+        (n) => () =>
+          `00000000-0000-0000-0003-${String(++n).padStart(12, "0")}`
+      )(0),
+    });
+    const count = (text: string, token: string) => text.split(token).length - 1;
+    const tidied = applySchematicEdits(drawn.source, [{ op: "tidy" }], again());
+    expect(netsOf(tidied.source)).toEqual(netsOf(drawn.source));
+    // One name for each shared net, where every pin had its own before.
+    expect(count(drawn.source, '(label "EN"')).toBe(3);
+    expect(count(tidied.source, '(label "EN"')).toBe(1);
+    // Buttons: a rail above R1 and one ground under R2 and R3. MCU: one of each for the bank.
+    expect(count(tidied.source, '(lib_id "power:+3V3")')).toBe(2);
+    expect(count(tidied.source, '(lib_id "power:GND")')).toBe(2);
+    expect(count(tidied.source, "(junction")).toBeGreaterThan(0);
+    // The rail end of each part points up, whichever pin it is on.
+    const turn = Object.fromEntries(tidied.placed.map((placed) => [placed.reference, placed]));
+    expect(turn.R4?.rotation).not.toBe(turn.R5?.rotation);
+    expect(turn.R6?.rotation).toBe(0);
+    // Wires it drew itself are no reason to leave a block alone the next time.
+    const twice = applySchematicEdits(tidied.source, [{ op: "tidy" }], again());
+    expect(twice.source).toBe(tidied.source);
+
+    // A part taken off its line keeps its nets, and so do the parts left on it.
+    const moved = applySchematicEdits(
+      tidied.source,
+      [{ op: "move", reference: "R2", at: { x: 200, y: 150 } }],
+      again(),
+    );
+    expect(netsOf(moved.source)).toEqual(netsOf(drawn.source));
+    const removed = applySchematicEdits(
+      tidied.source,
+      [{ op: "remove", reference: "R4" }],
+      again(),
+    );
+    const { "R4.1": _one, "R4.2": _two, ...rest } = netsOf(drawn.source);
+    expect(netsOf(removed.source)).toEqual(rest);
+  });
+
   it("moves a part with its connections and removes them with the part", () => {
     const placed = applySchematicEdits(
       BLANK,

@@ -393,6 +393,16 @@ function addLabel(session: Session, net: string, at: Point, rotation: number): v
   ]);
 }
 
+function addJunction(session: Session, at: Point): void {
+  insert(session, [
+    "junction",
+    ["at", numeric(at.x), numeric(at.y)],
+    ["diameter", "0"],
+    ["color", "0", "0", "0", "0"],
+    ["uuid", quoted(session.context.uuid())],
+  ]);
+}
+
 /** Connects a pin to a net: a short wire ending in a power symbol or a label. */
 function connectPin(session: Session, pin: Pin, net: string): void {
   const end = { x: pin.at.x + pin.out.x * STUB, y: pin.at.y + pin.out.y * STUB };
@@ -499,7 +509,7 @@ function footprintBox(
     const net = nets[pin.number];
     if (!net) continue;
     // Room for the wire and the label or power symbol at its end.
-    const reach = STUB + Math.max(net.length * TEXT * 0.9, 2 * STUB);
+    const reach = STUB + Math.max(net.length * TEXT * 0.9, STUB);
     grow({ x: pin.at.x + pin.out.x * reach, y: pin.at.y + pin.out.y * reach });
     const across = { x: Math.abs(pin.out.y) * STUB, y: Math.abs(pin.out.x) * STUB };
     grow({
@@ -662,33 +672,109 @@ function occupied(session: Session): ReadonlyArray<Box> {
   return boxes;
 }
 
+const ends = (wire: List) =>
+  all(find(wire, "pts") ?? [], "xy").map((point) => ({ x: num(point[1]), y: num(point[2]) }));
+
+/** True when `point` lies on a wire between its ends. */
+function insideWire(point: Point, wire: List): boolean {
+  const [a, b] = ends(wire);
+  if (!a || !b || same(point, a) || same(point, b)) return false;
+  const cross = (b.x - a.x) * (point.y - a.y) - (b.y - a.y) * (point.x - a.x);
+  if (Math.abs(cross) > 1e-3) return false;
+  const along = (point.x - a.x) * (b.x - a.x) + (point.y - a.y) * (b.y - a.y);
+  return along > 0 && along < (b.x - a.x) ** 2 + (b.y - a.y) ** 2;
+}
+
+/** What is joined at a point: the wires, and the labels and power symbols naming them. */
+interface Joined {
+  readonly wires: ReadonlyArray<List>;
+  readonly names: ReadonlyArray<List>;
+  /** Undefined when nothing on this sheet names the net. */
+  readonly net: string | undefined;
+}
+
+const isPowerName = (symbol: List) =>
+  text(find(symbol, "lib_id")?.[1]).startsWith("power:") && referenceOf(symbol).startsWith("#PWR");
+const touches = (point: Point, wire: List) =>
+  ends(wire).some((end) => same(end, point)) || insideWire(point, wire);
+
+/** Follows the sheet's wires once, and then answers what any point is joined to. */
+function connections(session: Session): (point: Point) => Joined | undefined {
+  const wires = all(session.root, "wire");
+  const parent = wires.map((_, index) => index);
+  const rootOf = (index: number): number => {
+    let at = index;
+    while (parent[at] !== at) at = parent[at] as number;
+    return at;
+  };
+  wires.forEach((wire, index) => {
+    for (let other = index + 1; other < wires.length; other++) {
+      const next = wires[other] as List;
+      if (
+        ends(wire).some((end) => touches(end, next)) ||
+        ends(next).some((end) => touches(end, wire))
+      ) {
+        parent[rootOf(index)] = rootOf(other);
+      }
+    }
+  });
+  const netAt = (point: Point) => {
+    const index = wires.findIndex((wire) => touches(point, wire));
+    return index < 0 ? undefined : rootOf(index);
+  };
+  const named = [
+    ...all(session.root, "label"),
+    ...sheetSymbols(session.root).filter(isPowerName),
+  ].map((node) => ({ node, at: positionOf(node), net: netAt(positionOf(node)) }));
+  // A net that leaves the sheet cannot be redrawn from what this sheet shows.
+  const leaving = new Set(
+    [...all(session.root, "global_label"), ...all(session.root, "hierarchical_label")].map((node) =>
+      netAt(positionOf(node)),
+    ),
+  );
+  return (point) => {
+    const net = netAt(point);
+    const names = named
+      .filter((name) => (net === undefined ? same(name.at, point) : name.net === net))
+      .map((name) => name.node);
+    if (net === undefined && names.length === 0) return undefined;
+    const first = names[0];
+    return {
+      wires: net === undefined ? [] : wires.filter((_, index) => rootOf(index) === net),
+      names,
+      net:
+        !first || leaving.has(net)
+          ? undefined
+          : head(first) === "label"
+            ? text(first[1])
+            : text(propertyOf(first, "Value")?.[2]),
+    };
+  };
+}
+
 /**
- * Removes the short connections made for a part's pins and returns the net
- * each pin was on, so the part can be connected again somewhere else.
+ * Takes a part's pins off their nets and returns the net each pin was on, so
+ * the part can be connected again somewhere else. Only the wire at the pin goes.
  */
 function detach(session: Session, pins: ReadonlyArray<Pin>): Record<string, string> {
+  const joined = connections(session);
   const nets: Record<string, string> = {};
-  for (const pin of pins) {
+  for (const { pin, net } of pins.map((pin) => ({ pin, net: joined(pin.at)?.net }))) {
     for (const marker of all(session.root, "no_connect")) {
       if (same(positionOf(marker), pin.at)) removeNode(session, marker);
     }
+    if (!net) continue;
     for (const wire of all(session.root, "wire")) {
       const [a, b] = ends(wire);
       if (!a || !b || (!same(a, pin.at) && !same(b, pin.at))) continue;
       const far = same(a, pin.at) ? b : a;
-      const shared = all(session.root, "wire").some(
-        (other) => other !== wire && ends(other).some((point) => same(point, far)),
-      );
-      if (shared) continue;
-      const labels = all(session.root, "label").filter((label) => same(positionOf(label), far));
-      const powers = sheetSymbols(session.root).filter(
-        (symbol) =>
-          text(find(symbol, "lib_id")?.[1]).startsWith("power:") && same(positionOf(symbol), far),
-      );
-      const net = text(labels[0]?.[1]) || text(propertyOf(powers[0] ?? [], "Value")?.[2]);
-      if (!net) continue;
       nets[pin.number] = net;
-      for (const node of [wire, ...labels, ...powers]) removeNode(session, node);
+      removeNode(session, wire);
+      if (all(session.root, "wire").some((other) => touches(far, other))) continue;
+      for (const name of [...all(session.root, "label"), ...sheetSymbols(session.root)]) {
+        const naming = head(name) === "label" || isPowerName(name);
+        if (naming && same(positionOf(name), far)) removeNode(session, name);
+      }
     }
   }
   return nets;
@@ -787,6 +873,7 @@ function settle(
   nets: Readonly<Record<string, string>>,
   unconnected: ReadonlyArray<string>,
   placed: Array<PlacedPart>,
+  wired: ReadonlySet<string> = new Set(),
 ): void {
   const reference = referenceOf(part);
   const libId = text(find(part, "lib_id")?.[1]);
@@ -815,64 +902,10 @@ function settle(
   if (mirror && mirrorNode) mirrorNode[1] = mirror;
   else if (mirror)
     part.splice(part.findIndex((entry) => head(entry) === "at") + 1, 0, ["mirror", mirror]);
-  connectPins(session, placedPins(library, at, rotation, mirror), reference, nets, unconnected);
+  // Pins in `wired` are joined by wires the caller draws, so they get no label of their own.
+  const labelled = Object.fromEntries(Object.entries(nets).filter(([pin]) => !wired.has(pin)));
+  connectPins(session, placedPins(library, at, rotation, mirror), reference, labelled, unconnected);
   placed.push({ reference, symbol: libId, at, rotation, nets });
-}
-
-/** What names the far end of a pin's short wire: its labels and power symbols. */
-function namesAt(session: Session, point: Point): ReadonlyArray<List> {
-  return [
-    ...all(session.root, "label").filter((label) => same(positionOf(label), point)),
-    ...sheetSymbols(session.root).filter(
-      (symbol) =>
-        text(find(symbol, "lib_id")?.[1]).startsWith("power:") &&
-        referenceOf(symbol).startsWith("#PWR") &&
-        same(positionOf(symbol), point),
-    ),
-  ];
-}
-
-/** The wires at a pin, each with the end away from it. */
-function wiresAt(session: Session, pin: Pin): ReadonlyArray<{ wire: List; far: Point }> {
-  return all(session.root, "wire").flatMap((wire) => {
-    const [a, b] = ends(wire);
-    if (!a || !b || (!same(a, pin.at) && !same(b, pin.at))) return [];
-    return [{ wire, far: same(a, pin.at) ? b : a }];
-  });
-}
-
-/** Whether a pin is wired by hand: by a wire that does not end in a label or power symbol. */
-function drawnByHand(session: Session, pin: Pin): boolean {
-  return (
-    all(session.root, "wire").some((wire) => insideWire(pin.at, wire)) ||
-    wiresAt(session, pin).some(({ far }) => namesAt(session, far).length === 0)
-  );
-}
-
-/**
- * Takes a part's short wires off the sheet and returns the net of each pin.
- * Two parts may share the label where their short wires meet; it goes with the last of them.
- */
-function unhook(session: Session, pins: ReadonlyArray<Pin>): Record<string, string> {
-  const nets: Record<string, string> = {};
-  for (const pin of pins) {
-    for (const marker of all(session.root, "no_connect")) {
-      if (same(positionOf(marker), pin.at)) removeNode(session, marker);
-    }
-    for (const { wire, far } of wiresAt(session, pin)) {
-      const names = namesAt(session, far);
-      const first = names[0];
-      if (!first) continue;
-      nets[pin.number] =
-        head(first) === "label" ? text(first[1]) : text(propertyOf(first, "Value")?.[2]);
-      removeNode(session, wire);
-      const shared = all(session.root, "wire").some((other) =>
-        ends(other).some((point) => same(point, far)),
-      );
-      if (!shared) for (const name of names) removeNode(session, name);
-    }
-  }
-  return nets;
 }
 
 const GROUND = /^\/?[ADP]?GND|^\/?VSS/i;
@@ -936,18 +969,261 @@ const FRAME_STROKE = "0.1524";
 const OTHER_BLOCK = "Other";
 const naturally = new Intl.Collator("en", { numeric: true }).compare;
 
+interface Member {
+  readonly part: List;
+  readonly library: ReadonlyArray<Node>;
+  readonly pins: ReadonlyArray<Pin>;
+  readonly big: boolean;
+}
+/** A part at its place in a piece of a block, with the pins that wires reach. */
+interface Spot {
+  readonly member: Member;
+  readonly rotation: number;
+  readonly x: number;
+  readonly y: number;
+  readonly wired: ReadonlySet<string>;
+}
+/** Parts laid out together with the wires between them, measured from its top left. */
+interface Piece {
+  readonly width: number;
+  readonly height: number;
+  readonly spots: ReadonlyArray<Spot>;
+  readonly wires: ReadonlyArray<readonly [Point, Point]>;
+  readonly junctions: ReadonlyArray<Point>;
+  /** Where a net's wire gets its name: a power symbol or a label, pointing along `out`. */
+  readonly names: ReadonlyArray<{ readonly at: Point; readonly out: Point; readonly net: string }>;
+}
+/** A two-pin part with its pins in line, which can sit in a wire. */
+interface Link {
+  readonly member: Member;
+  readonly nets: readonly [string, string];
+  readonly pins: readonly [string, string];
+}
+
+/** Wire kept between a pin and the line it joins. */
+const LEAD = 2.54;
+/** Room a power symbol takes past the end of its wire. */
+const SYMBOL_ROOM = 10.16;
+const onGrid = (value: number) => snap(Math.ceil(value / GRID - 1e-6) * GRID);
+const kindOf = (session: Session, net: string) =>
+  GROUND.test(net) ? 2 : isRail(session, net) ? 0 : 1;
+
+function linkOf(member: Member, nets: Readonly<Record<string, string>>): Link | undefined {
+  const [first, second] = placedPins(member.library, { x: 0, y: 0 }, 0, mirrorOf(member.part));
+  if (member.pins.length !== 2 || !first || !second) return undefined;
+  const opposed = first.out.x === -second.out.x && first.out.y === -second.out.y;
+  const inLine = first.out.x !== 0 ? first.at.y === second.at.y : first.at.x === second.at.x;
+  const a = nets[first.number];
+  const b = nets[second.number];
+  if (!opposed || !inLine || !a || !b || a === b) return undefined;
+  return { member, nets: [a, b], pins: [first.number, second.number] };
+}
+
+/**
+ * Draws parts that share nets as a ladder: each shared net is one level line, rails
+ * at the top and ground at the foot, and each part stands between the lines it joins.
+ */
+function ladder(session: Session, links: ReadonlyArray<Link>): Piece {
+  const uses = new Map<string, number>();
+  for (const link of links) {
+    for (const net of link.nets) uses.set(net, (uses.get(net) ?? 0) + 1);
+  }
+  const kind = (net: string) => kindOf(session, net);
+  // How many parts lie between a net and the nearest rail, or the nearest ground.
+  const stepsTo = (target: number) => {
+    const steps = new Map(
+      [...uses.keys()].filter((net) => kind(net) === target).map((net) => [net, 0]),
+    );
+    for (let changed = true; changed;) {
+      changed = false;
+      for (const { nets } of links) {
+        for (const [from, to] of [nets, [nets[1], nets[0]] as const]) {
+          const next = (steps.get(from) ?? Infinity) + 1;
+          if (next < (steps.get(to) ?? Infinity)) {
+            steps.set(to, next);
+            changed = true;
+          }
+        }
+      }
+    }
+    return steps;
+  };
+  const up = stepsTo(0);
+  const down = stepsTo(2);
+  const lean = (net: string) => (up.get(net) ?? 1e3) - (down.get(net) ?? 1e3);
+  const lines = [...uses]
+    .filter(([, count]) => count >= 2)
+    .map(([net]) => net)
+    .sort((a, b) => kind(a) - kind(b) || lean(a) - lean(b) || naturally(a, b));
+  const level = new Map(lines.map((net, index) => [net, index + 1]));
+  // An end that joins no line: rails go up, ground down, a signal away from the part's line.
+  const above = (end: string, line: string) =>
+    kind(end) === 0 ||
+    (kind(end) === 1 && (kind(line) === 2 || (kind(line) === 1 && lean(line) >= 0)));
+
+  const stood = links.map((link) => {
+    const [a, b] = link.nets;
+    const la = level.get(a);
+    const lb = level.get(b);
+    const firstUp = la && lb ? la < lb : la ? !above(b, a) : lb ? above(a, b) : kind(a) <= kind(b);
+    const top = firstUp ? 0 : 1;
+    const mirror = mirrorOf(link.member.part);
+    const pinsAt = (turn: number) => placedPins(link.member.library, { x: 0, y: 0 }, turn, mirror);
+    const rotation =
+      [0, 90, 180, 270].find(
+        (turn) => pinsAt(turn).find((pin) => pin.number === link.pins[top])?.out.y === -1,
+      ) ?? 0;
+    const pins = pinsAt(rotation);
+    const pinAt = (index: number) =>
+      pins.find((pin) => pin.number === link.pins[index])?.at ?? { x: 0, y: 0 };
+    const upper = level.get(link.nets[top]);
+    const lower = level.get(link.nets[1 - top] as string);
+    const hanging = Object.fromEntries(
+      [0, 1]
+        .filter((index) => !level.has(link.nets[index] as string))
+        .map((index) => [link.pins[index], link.nets[index]]),
+    );
+    return {
+      link,
+      rotation,
+      upper,
+      lower,
+      // The bands, counted from the top, that the part stands in.
+      from: upper ?? (lower ?? 1) - 1,
+      to: lower ? lower - 1 : (upper ?? 0),
+      topPin: pinAt(top),
+      footPin: pinAt(1 - top),
+      box: footprintBox(link.member.library, rotation, mirror, hanging),
+      wired: new Set(
+        [0, 1]
+          .filter((index) => level.has(link.nets[index] as string))
+          .map((index) => link.pins[index] as string),
+      ),
+    };
+  });
+
+  // Band k lies under line k; the first is above every line, the last below them all.
+  const bands: Array<number> = lines.map((net) => (kind(net) === 0 ? SYMBOL_ROOM : LEAD));
+  bands.push(lines.length > 0 && kind(lines.at(-1) as string) === 2 ? SYMBOL_ROOM : LEAD);
+  const span = (part: (typeof stood)[number]) => part.footPin.y - part.topPin.y;
+  for (const part of stood) {
+    const needs =
+      part.upper && part.lower
+        ? span(part) + 2 * LEAD
+        : part.lower
+          ? part.footPin.y - part.box.minY + LEAD
+          : part.box.maxY - part.topPin.y + LEAD;
+    const have = bands.slice(part.from, part.to + 1).reduce((sum, size) => sum + size, 0);
+    if (needs > have) bands[part.to] = onGrid((bands[part.to] ?? 0) + needs - have);
+  }
+  const lineY = (index: number) => bands.slice(0, index).reduce((sum, size) => sum + size, 0);
+
+  // Each part takes the first column that is free in all of its bands.
+  const columns: Array<{ taken: Set<number>; parts: Array<(typeof stood)[number]> }> = [];
+  const inOrder = [...stood].sort(
+    (a, b) =>
+      a.from - b.from ||
+      naturally(referenceOf(a.link.member.part), referenceOf(b.link.member.part)),
+  );
+  for (const part of inOrder) {
+    const rows = Array.from({ length: part.to - part.from + 1 }, (_, index) => part.from + index);
+    let column = columns.find(({ taken }) => rows.every((row) => !taken.has(row)));
+    if (!column) {
+      column = { taken: new Set(), parts: [] };
+      columns.push(column);
+    }
+    for (const row of rows) column.taken.add(row);
+    column.parts.push(part);
+  }
+
+  // Names sit left of the first column: labels reach left, power symbols stand on the line's end.
+  const nameRoom = Math.max(
+    STUB,
+    ...lines.map((net) => (kind(net) === 1 ? STUB + net.length * TEXT * 0.9 : STUB)),
+  );
+  const spots: Array<Spot> = [];
+  const wires: Array<readonly [Point, Point]> = [];
+  const joins = new Map<string, Array<number>>();
+  const columnAt = new Map<number, Set<number>>();
+  let cursor = nameRoom + LEAD;
+  for (const column of columns) {
+    const x = onGrid(cursor + Math.max(...column.parts.map((part) => -part.box.minX)));
+    for (const part of column.parts) {
+      const y = part.upper
+        ? lineY(part.upper) + LEAD - part.topPin.y
+        : lineY(part.lower ?? 0) - LEAD - part.footPin.y;
+      spots.push({ member: part.link.member, rotation: part.rotation, x, y, wired: part.wired });
+      const pinX = x + part.topPin.x;
+      columnAt.set(pinX, column.taken);
+      for (const [line, pinY] of [
+        [part.upper, y + part.topPin.y],
+        [part.lower, y + part.footPin.y],
+      ] as const) {
+        if (!line) continue;
+        wires.push([
+          { x: pinX, y: pinY },
+          { x: pinX, y: lineY(line) },
+        ]);
+        const net = lines[line - 1] as string;
+        joins.set(net, [...(joins.get(net) ?? []), pinX]);
+      }
+    }
+    cursor = x + Math.max(...column.parts.map((part) => part.box.maxX)) + LEAD;
+  }
+  const junctions: Array<Point> = [];
+  const names = lines.map((net, index) => {
+    const y = lineY(index + 1);
+    const leads = [...(joins.get(net) ?? [])].sort((a, b) => a - b);
+    // A power symbol stands on the line itself where the column beside it is empty.
+    const band = kind(net) === 0 ? index : index + 1;
+    const clear = leads.find((x) => !columnAt.get(x)?.has(band));
+    const nameX = kind(net) !== 1 && clear !== undefined ? clear : nameRoom;
+    const stops = [...new Set([nameX, ...leads])].sort((a, b) => a - b);
+    stops.slice(1).forEach((x, at) =>
+      wires.push([
+        { x: stops[at] as number, y },
+        { x, y },
+      ]),
+    );
+    for (const x of stops) {
+      const ending = x === stops[0] || x === stops.at(-1) ? 1 : 2;
+      const meeting = leads.filter((lead) => lead === x).length + ending + (x === nameX ? 1 : 0);
+      if (stops.length > 1 && meeting > 2) junctions.push({ x, y });
+    }
+    const out =
+      kind(net) === 0 ? { x: 0, y: -1 } : kind(net) === 2 ? { x: 0, y: 1 } : { x: -1, y: 0 };
+    return { at: { x: nameX, y }, out, net };
+  });
+  return { width: cursor - LEAD, height: lineY(bands.length), spots, wires, junctions, names };
+}
+
+/** Groups a block's two-pin parts by the nets they share, each group to be drawn as one ladder. */
+function ladders(session: Session, links: ReadonlyArray<Link>): ReadonlyArray<ReadonlyArray<Link>> {
+  const shared = new Map<string, Array<Link>>();
+  for (const link of links) {
+    const [a, b] = link.nets;
+    const powered = kindOf(session, a) !== 1 && kindOf(session, b) !== 1;
+    // Signals tie parts into one circuit; parts across the same two rails form a bank.
+    const keys = powered
+      ? [[a, b].sort().join(" | ")]
+      : link.nets.filter((net) => kindOf(session, net) === 1);
+    for (const key of keys) shared.set(key, [...(shared.get(key) ?? []), link]);
+  }
+  const groupOf = new Map<Link, Set<Link>>();
+  for (const together of shared.values()) {
+    if (together.length < 2) continue;
+    const merged = new Set(together.flatMap((link) => [...(groupOf.get(link) ?? [link])]));
+    for (const link of merged) groupOf.set(link, merged);
+  }
+  return [...new Set(groupOf.values())].map((group) => [...group]);
+}
+
 /**
  * Lays the sheet out: each block framed and named, blocks in columns from power in
- * to what the controller drives, big parts on a block's left and small ones in rows
- * beside them. Blocks with wires drawn by hand are left exactly as they are.
+ * to what the controller drives, big parts on a block's left, and the small parts
+ * beside them wired together where they share a net. Nets nothing names stay as drawn.
  */
 function tidy(session: Session, placed: Array<PlacedPart>): ReadonlyArray<string> {
-  interface Member {
-    readonly part: List;
-    readonly library: ReadonlyArray<Node>;
-    readonly pins: ReadonlyArray<Pin>;
-    readonly big: boolean;
-  }
   const blocks = new Map<string, Array<Member>>();
   const supply = [...groupAreas(session).keys()].find((name) => /power|supply/i.test(name));
   for (const part of sheetSymbols(session.root)) {
@@ -962,9 +1238,28 @@ function tidy(session: Session, placed: Array<PlacedPart>): ReadonlyArray<string
       { part, library, pins, big: pins.length > 3 },
     ]);
   }
+  // A net with wires and no name can only be kept by keeping its wires, so its blocks stay.
+  const joined = connections(session);
+  const wiresOf = (members: ReadonlyArray<Member>) =>
+    members.flatMap(({ pins }) => pins.flatMap((pin) => joined(pin.at)?.wires ?? []));
   const kept = [...blocks].filter(([, members]) =>
-    members.some((member) => member.pins.some((pin) => drawnByHand(session, pin))),
+    members.some(({ pins }) =>
+      pins.some((pin) => {
+        const net = joined(pin.at);
+        return net !== undefined && net.net === undefined;
+      }),
+    ),
   );
+  for (let grown = true; grown;) {
+    grown = false;
+    const held = new Set(kept.flatMap(([, members]) => wiresOf(members)));
+    for (const [name, members] of blocks) {
+      if (kept.some(([other]) => other === name)) continue;
+      if (!wiresOf(members).some((wire) => held.has(wire))) continue;
+      kept.push([name, members]);
+      grown = true;
+    }
+  }
   for (const [name] of kept) blocks.delete(name);
   if (blocks.size === 0) {
     throw refuse(
@@ -984,68 +1279,107 @@ function tidy(session: Session, placed: Array<PlacedPart>): ReadonlyArray<string
     if (framed || (head(node) === "text" && names.has(text(node[1])))) removeNode(session, node);
   }
   const loose = new Map<List, { nets: Record<string, string>; open: ReadonlyArray<string> }>();
+  const gone = new Set<List>();
   for (const members of blocks.values()) {
     for (const { part, pins } of members) {
-      const open = markedUnconnected(session, pins);
-      loose.set(part, { nets: unhook(session, pins), open });
+      const nets: Record<string, string> = {};
+      for (const pin of pins) {
+        const net = joined(pin.at);
+        if (!net?.net) continue;
+        nets[pin.number] = net.net;
+        for (const node of [...net.wires, ...net.names]) gone.add(node);
+      }
+      loose.set(part, { nets, open: markedUnconnected(session, pins) });
+      for (const marker of all(session.root, "no_connect")) {
+        if (pins.some((pin) => same(pin.at, positionOf(marker)))) gone.add(marker);
+      }
     }
   }
+  for (const junction of all(session.root, "junction")) {
+    const at = positionOf(junction);
+    if ([...gone].some((node) => head(node) === "wire" && touches(at, node))) gone.add(junction);
+  }
+  for (const node of gone) removeNode(session, node);
 
-  // Each block on its own: big parts in a column, small ones in rows to their right.
+  // Each block on its own: big parts in a column, the rest in rows to their right.
   const laid = [...blocks].map(([name, members]) => {
-    const sized = [...members]
-      .sort((a, b) => naturally(referenceOf(a.part), referenceOf(b.part)))
-      .map((member) => {
-        const nets = loose.get(member.part)?.nets ?? {};
-        const mirror = mirrorOf(member.part);
-        const now = num(find(member.part, "at")?.[3]);
-        const rotation = member.big ? now : standing(session, member.library, mirror, nets, now);
-        return { ...member, rotation, box: footprintBox(member.library, rotation, mirror, nets) };
-      });
-    const big = sized.filter((member) => member.big).sort((a, b) => b.pins.length - a.pins.length);
-    const small = sized.filter((member) => !member.big);
-    const spots: Array<{ member: (typeof sized)[number]; x: number; y: number }> = [];
+    const netsOf = (member: Member) => loose.get(member.part)?.nets ?? {};
+    const alone = (member: Member): Piece & { readonly first: string } => {
+      const mirror = mirrorOf(member.part);
+      const now = num(find(member.part, "at")?.[3]);
+      const rotation = member.big
+        ? now
+        : standing(session, member.library, mirror, netsOf(member), now);
+      const box = footprintBox(member.library, rotation, mirror, netsOf(member));
+      return {
+        first: referenceOf(member.part),
+        width: box.maxX - box.minX,
+        height: box.maxY - box.minY,
+        spots: [{ member, rotation, x: -box.minX, y: -box.minY, wired: new Set() }],
+        wires: [],
+        junctions: [],
+        names: [],
+      };
+    };
+    const byReference = (a: { first: string }, b: { first: string }) => naturally(a.first, b.first);
+    const big = members
+      .filter((member) => member.big)
+      .sort((a, b) => b.pins.length - a.pins.length)
+      .map(alone);
+    const links = members.flatMap((member) =>
+      member.big ? [] : (linkOf(member, netsOf(member)) ?? []),
+    );
+    const groups = ladders(session, links);
+    const drawn = new Set(groups.flat().map((link) => link.member));
+    const small = [
+      ...groups.map((group) => ({
+        ...ladder(session, group),
+        first: [...group.map((link) => referenceOf(link.member.part))].sort(naturally)[0] ?? "",
+      })),
+      ...members.filter((member) => !member.big && !drawn.has(member)).map(alone),
+    ].sort(byReference);
+
+    const pieces: Array<{ piece: Piece; x: number; y: number }> = [];
     let height = 0;
     let width = 0;
-    for (const member of big) {
-      spots.push({ member, x: -member.box.minX, y: height - member.box.minY });
-      width = Math.max(width, member.box.maxX - member.box.minX);
-      height += member.box.maxY - member.box.minY + 2 * SPACING;
+    for (const piece of big) {
+      pieces.push({ piece, x: 0, y: height });
+      width = Math.max(width, piece.width);
+      height += piece.height + 2 * SPACING;
     }
     height = Math.max(0, height - 2 * SPACING);
     if (small.length > 0) {
-      const tallest = Math.max(...small.map(({ box }) => box.maxY - box.minY)) + SPACING;
-      // As many rows as the big parts are tall, and never a row longer than four.
-      const beside = big.length > 0 ? Math.floor((height + SPACING) / tallest) : 1;
-      const rows = Math.min(small.length, Math.max(1, beside, Math.ceil(small.length / 4)));
-      const columns = Math.ceil(small.length / rows);
-      // Each column is as wide, and each row as tall, as the largest part in it.
-      const widths = Array.from({ length: columns }, () => 0);
-      const heights = Array.from({ length: Math.ceil(small.length / columns) }, () => 0);
-      small.forEach(({ box }, index) => {
-        const column = index % columns;
-        const row = Math.floor(index / columns);
-        widths[column] = Math.max(widths[column] ?? 0, box.maxX - box.minX);
-        heights[row] = Math.max(heights[row] ?? 0, box.maxY - box.minY);
-      });
-      const before = (sizes: ReadonlyArray<number>, index: number) =>
-        sizes.slice(0, index).reduce((sum, size) => sum + size + SPACING, 0);
+      // Rows as long as it takes to stand about as tall as the big parts, or to look square.
+      const area = small.reduce(
+        (sum, piece) => sum + (piece.width + SPACING) * (piece.height + SPACING),
+        0,
+      );
+      const widest = Math.max(...small.map((piece) => piece.width));
+      const limit = Math.max(
+        widest,
+        big.length > 0 ? (1.3 * area) / Math.max(height, 1) : 0,
+        1.6 * Math.sqrt(area) * (big.length > 0 ? 0.5 : 1),
+      );
       const left = big.length > 0 ? width + 2 * SPACING : 0;
-      small.forEach((member, index) => {
-        const column = index % columns;
-        const slack = (widths[column] ?? 0) - (member.box.maxX - member.box.minX);
-        spots.push({
-          member,
-          x: left + before(widths, column) + slack / 2 - member.box.minX,
-          y: before(heights, Math.floor(index / columns)) - member.box.minY,
-        });
-      });
-      width = left + before(widths, columns) - SPACING;
-      height = Math.max(height, before(heights, heights.length) - SPACING);
+      let x = 0;
+      let y = 0;
+      let tall = 0;
+      for (const piece of small) {
+        if (x > 0 && x + piece.width > limit) {
+          x = 0;
+          y += tall + SPACING;
+          tall = 0;
+        }
+        pieces.push({ piece, x: left + x, y });
+        x += piece.width + SPACING;
+        tall = Math.max(tall, piece.height);
+        width = Math.max(width, left + x - SPACING);
+      }
+      height = Math.max(height, y + tall);
     }
     return {
       name,
-      spots,
+      pieces,
       width: width + 2 * FRAME_MARGIN,
       height: height + 2 * FRAME_MARGIN + 2 * TITLE,
     };
@@ -1117,19 +1451,30 @@ function tidy(session: Session, placed: Array<PlacedPart>): ReadonlyArray<string
       ],
       ["uuid", quoted(session.context.uuid())],
     ]);
-    for (const { member, x: dx, y: dy } of block.spots) {
-      const held = loose.get(member.part);
-      settle(
-        session,
-        member.part,
-        { x: snap(x + FRAME_MARGIN + dx), y: snap(y + FRAME_MARGIN + 2 * TITLE + dy) },
-        member.rotation,
-        mirrorOf(member.part),
-        held?.nets ?? {},
-        held?.open ?? [],
-        placed,
-      );
-      count++;
+    const left = x + FRAME_MARGIN;
+    const top = y + FRAME_MARGIN + 2 * TITLE;
+    for (const { piece, x: px, y: py } of block.pieces) {
+      const on = (point: Point) => ({ x: snap(left + px + point.x), y: snap(top + py + point.y) });
+      for (const spot of piece.spots) {
+        const held = loose.get(spot.member.part);
+        settle(
+          session,
+          spot.member.part,
+          on(spot),
+          spot.rotation,
+          mirrorOf(spot.member.part),
+          held?.nets ?? {},
+          held?.open ?? [],
+          placed,
+          spot.wired,
+        );
+        count++;
+      }
+      for (const [from, to] of piece.wires) addWire(session, [on(from), on(to)]);
+      for (const at of piece.junctions) addJunction(session, on(at));
+      for (const { at, out, net } of piece.names) {
+        connectPin(session, { number: "", name: "", at: on(at), out }, net);
+      }
     }
   }
   return [
@@ -1151,30 +1496,11 @@ const ERASED_NAME: Readonly<Record<string, string>> = {
   no_connect: "a no-connect mark",
 };
 
-const ends = (wire: List) =>
-  all(find(wire, "pts") ?? [], "xy").map((point) => ({ x: num(point[1]), y: num(point[2]) }));
-
-/** True when `point` lies on a wire between its ends. */
-function insideWire(point: Point, wire: List): boolean {
-  const [a, b] = ends(wire);
-  if (!a || !b || same(point, a) || same(point, b)) return false;
-  const cross = (b.x - a.x) * (point.y - a.y) - (b.y - a.y) * (point.x - a.x);
-  if (Math.abs(cross) > 1e-3) return false;
-  const along = (point.x - a.x) * (b.x - a.x) + (point.y - a.y) * (b.y - a.y);
-  return along > 0 && along < (b.x - a.x) ** 2 + (b.y - a.y) ** 2;
-}
-
 /** A wire that ends in the middle of another one only connects through a junction. */
 function joinWire(session: Session, point: Point, before: ReadonlyArray<List>): void {
   if (!before.some((wire) => insideWire(point, wire))) return;
   if (all(session.root, "junction").some((junction) => same(positionOf(junction), point))) return;
-  insert(session, [
-    "junction",
-    ["at", numeric(point.x), numeric(point.y)],
-    ["diameter", "0"],
-    ["color", "0", "0", "0", "0"],
-    ["uuid", quoted(session.context.uuid())],
-  ]);
+  addJunction(session, point);
 }
 
 /** A point in words: the pin that sits there, or its coordinates. */
@@ -1327,13 +1653,7 @@ export function applySchematicEdits(
         summary.push(`Added the label ${edit.net.trim()} at ${describePoint(session, edit.at)}`);
         break;
       case "junction":
-        insert(session, [
-          "junction",
-          ["at", numeric(edit.at.x), numeric(edit.at.y)],
-          ["diameter", "0"],
-          ["color", "0", "0", "0", "0"],
-          ["uuid", quoted(context.uuid())],
-        ]);
+        addJunction(session, edit.at);
         summary.push(`Added a junction at ${describePoint(session, edit.at)}`);
         break;
       case "no_connect":

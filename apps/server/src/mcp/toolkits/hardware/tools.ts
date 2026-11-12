@@ -446,7 +446,7 @@ const JlcPartImportTool = Tool.make("jlc_part_import", {
 
 const SchematicTidyTool = Tool.make("sch_tidy", {
   description:
-    "Tidy a schematic (clean up, arrange, auto-layout): every block gets a frame with its name; blocks stand in columns from power in on the left, through the controller, to what it drives; inside a block the big parts are on the left and the small ones in rows beside them; capacitors and pull-ups stand between their rail above and ground below; the sheet grows to fit. Connections are not changed. Blocks with wires drawn by hand are left as they are. Run it once the schematic is drawn and after adding parts. Parts need a `group` to be sorted into blocks.",
+    "Tidy a schematic (clean up, arrange, auto-layout): every block gets a frame with its name; blocks stand in columns from power in on the left, through the controller, to what it drives; inside a block the big parts are on the left and the small ones in rows beside them; small parts that share a net are joined by drawn wires, with the rail above and ground below (decoupling capacitors on one rail line, a resistor in line with its LED); the sheet grows to fit. Connections and net names are not changed. Only blocks with wired nets that have no name are left as they are. Run it once the schematic is drawn and after adding parts. Parts need a `group` to be sorted into blocks.",
   parameters: SchematicTidyInput,
   success: SchematicEditResult,
   failure: HardwareFailure,
