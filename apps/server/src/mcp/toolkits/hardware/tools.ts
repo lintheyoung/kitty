@@ -42,6 +42,7 @@ import {
   SchematicChangesResult,
   SchematicEditInput,
   SchematicEditResult,
+  SchematicTidyInput,
   KicadBomResult,
   BoardEditInput,
   BoardEditResult,
@@ -443,6 +444,19 @@ const JlcPartImportTool = Tool.make("jlc_part_import", {
   .annotate(Tool.Idempotent, true)
   .annotate(Tool.OpenWorld, true);
 
+const SchematicTidyTool = Tool.make("sch_tidy", {
+  description:
+    "Tidy a schematic (clean up, arrange, auto-layout): every block gets a frame with its name; blocks stand in columns from power in on the left, through the controller, to what it drives; inside a block the big parts are on the left and the small ones in rows beside them; capacitors and pull-ups stand between their rail above and ground below; the sheet grows to fit. Connections are not changed. Blocks with wires drawn by hand are left as they are. Run it once the schematic is drawn and after adding parts. Parts need a `group` to be sorted into blocks.",
+  parameters: SchematicTidyInput,
+  success: SchematicEditResult,
+  failure: HardwareFailure,
+  dependencies: kicadDependencies,
+})
+  .annotate(Tool.Title, "Tidy schematic")
+  .annotate(Tool.Destructive, false)
+  .annotate(Tool.Idempotent, true)
+  .annotate(Tool.OpenWorld, false);
+
 const SchematicEditTool = Tool.make("sch_edit", {
   description:
     "Draw or change a schematic. `place` puts a part on the sheet (a free spot is found when `at` is left out) and connects its pins by net name: give `nets` as pin number to net, and every pin with the same net name is connected. Power nets (GND, +3V3, +5V, VBUS) get power symbols, other nets get labels. Give each part a `group` (Power, MCU, USB) so the blocks of the circuit sit apart and read clearly. Use `noConnectRest` for parts with unused pins. `connect` changes the nets of a part already on the sheet; `move`, `remove` and `set` change it. Parts must be `jlc:` symbols from jlc_part_import. A supply net that no regulator output drives needs a power:PWR_FLAG placed with that net on pin 1. KiCad reads the result back and nothing is saved if it cannot; the reply gives each part's pins with their nets, the ERC error count, and `userChanges`: what the user changed by hand since your last edit. The user sees your edits marked on the sheet and can revert them; a revert shows up in `userChanges`.",
@@ -536,6 +550,7 @@ export const HardwareToolkit = Toolkit.make(
   JlcPartSearchTool,
   JlcPartImportTool,
   SchematicEditTool,
+  SchematicTidyTool,
   SchematicChangesTool,
   HardwareProjectNewTool,
   HardwareProjectInspectTool,

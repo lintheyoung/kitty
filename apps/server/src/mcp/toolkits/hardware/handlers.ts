@@ -201,6 +201,16 @@ export const layer = McpToolAccess.toLayer(HardwareToolkit, {
       return yield* kicad.schematicEdit({ ...input, workspaceRoot: yield* callerWorkspaceRoot() });
     }),
   ),
+  sch_tidy: McpToolAccess.actsAsCaller((input) =>
+    Effect.gen(function* () {
+      const kicad = yield* KicadService.KicadService;
+      return yield* kicad.schematicEdit({
+        path: input.path,
+        edits: [{ op: "tidy" }],
+        workspaceRoot: yield* callerWorkspaceRoot(),
+      });
+    }),
+  ),
   sch_changes: McpToolAccess.actsAsCaller((input) =>
     Effect.gen(function* () {
       const kicad = yield* KicadService.KicadService;

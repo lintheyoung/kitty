@@ -67,6 +67,10 @@ export const SchematicEdit = Schema.Union([
       description: "The uuid of a wire, label, junction or no-connect mark to remove.",
     }),
   }),
+  Schema.Struct({ op: Schema.Literal("tidy") }).annotate({
+    description:
+      "Lay the sheet out again: blocks framed, named and in order from power in to outputs, parts on a grid.",
+  }),
   Schema.Struct({
     op: Schema.Literal("set"),
     reference: Reference,
@@ -94,6 +98,13 @@ export const SchematicEditInput = Schema.Struct({
   }),
 });
 export type SchematicEditInput = typeof SchematicEditInput.Type;
+
+export const SchematicTidyInput = Schema.Struct({
+  path: Schema.String.annotate({
+    description: "The design: its .kicad_sch, .kicad_pro or directory, relative to the workspace.",
+  }),
+});
+export type SchematicTidyInput = typeof SchematicTidyInput.Type;
 
 /** Which way to step through a schematic's edit history. */
 export const SchematicHistoryStep = Schema.Literals(["undo", "redo"]);

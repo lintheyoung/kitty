@@ -12,6 +12,7 @@ import {
   CheckIcon,
   ChevronRightIcon,
   LayersIcon,
+  LayoutGridIcon,
   MessageSquareIcon,
   PackageSearchIcon,
   PaintBucketIcon,
@@ -1125,6 +1126,17 @@ function DesignerView(props: {
             onClick={() => setRouteLayer((layer) => (layer === "F.Cu" ? "B.Cu" : "F.Cu"))}
           >
             {routeLayer === "F.Cu" ? "Front copper" : "Back copper"}
+          </Button>
+        ) : null}
+        {editable && project ? (
+          <Button
+            size="xs"
+            variant="ghost-muted"
+            disabled={editor.busy}
+            onClick={() => void editor.apply([{ op: "tidy" }])}
+          >
+            <LayoutGridIcon />
+            Tidy
           </Button>
         ) : null}
         {editable && project ? (

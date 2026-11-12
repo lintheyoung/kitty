@@ -58,6 +58,8 @@ export type SchematicEdit =
   | { readonly op: "remove"; readonly reference: string }
   /** Removes a wire, label, junction or no-connect mark by its id. */
   | { readonly op: "erase"; readonly id: string }
+  /** Lays the sheet out again: blocks framed and in order, parts on a grid. */
+  | { readonly op: "tidy" }
   | {
       readonly op: "set";
       readonly reference: string;
@@ -757,17 +759,40 @@ function move(
   placed: Array<PlacedPart>,
 ): void {
   const part = findPart(session, edit.reference);
-  const reference = referenceOf(part);
-  const libId = text(find(part, "lib_id")?.[1]);
-  const nets = detach(session, pinsOfPart(session, part));
-  const before = find(part, "at") ?? [];
+  const pins = pinsOfPart(session, part);
+  const unconnected = markedUnconnected(session, pins);
+  const nets = detach(session, pins);
   const from = positionOf(part);
-  const fromRotation = num(before[3]);
+  const fromRotation = num(find(part, "at")?.[3]);
   const at = edit.at
     ? { x: snap(edit.at.x), y: snap(edit.at.y) }
     : { x: from.x + (edit.by?.x ?? 0), y: from.y + (edit.by?.y ?? 0) };
   const rotation = turns(edit.rotation ?? fromRotation + (edit.rotateBy ?? 0)) * 90;
-  const mirror = edit.mirror ?? mirrorOf(part);
+  settle(session, part, at, rotation, edit.mirror ?? mirrorOf(part), nets, unconnected, placed);
+}
+
+/** The pins of a part that carry a no-connect mark. */
+function markedUnconnected(session: Session, pins: ReadonlyArray<Pin>): ReadonlyArray<string> {
+  const marks = all(session.root, "no_connect").map(positionOf);
+  return pins.filter((pin) => marks.some((mark) => same(mark, pin.at))).map((pin) => pin.number);
+}
+
+/** Puts a detached part at its new place and connects its pins again. */
+function settle(
+  session: Session,
+  part: List,
+  at: Point,
+  rotation: number,
+  mirror: Mirror | undefined,
+  nets: Readonly<Record<string, string>>,
+  unconnected: ReadonlyArray<string>,
+  placed: Array<PlacedPart>,
+): void {
+  const reference = referenceOf(part);
+  const libId = text(find(part, "lib_id")?.[1]);
+  const before = find(part, "at") ?? [];
+  const from = positionOf(part);
+  const fromRotation = num(before[3]);
   // Fields keep their place relative to the part when it only slides.
   const slides = rotation === fromRotation && mirror === mirrorOf(part);
   const library = embedded(session, libId);
@@ -790,8 +815,331 @@ function move(
   if (mirror && mirrorNode) mirrorNode[1] = mirror;
   else if (mirror)
     part.splice(part.findIndex((entry) => head(entry) === "at") + 1, 0, ["mirror", mirror]);
-  connectPins(session, placedPins(library, at, rotation, mirror), reference, nets, []);
+  connectPins(session, placedPins(library, at, rotation, mirror), reference, nets, unconnected);
   placed.push({ reference, symbol: libId, at, rotation, nets });
+}
+
+/** What names the far end of a pin's short wire: its labels and power symbols. */
+function namesAt(session: Session, point: Point): ReadonlyArray<List> {
+  return [
+    ...all(session.root, "label").filter((label) => same(positionOf(label), point)),
+    ...sheetSymbols(session.root).filter(
+      (symbol) =>
+        text(find(symbol, "lib_id")?.[1]).startsWith("power:") &&
+        referenceOf(symbol).startsWith("#PWR") &&
+        same(positionOf(symbol), point),
+    ),
+  ];
+}
+
+/** The wires at a pin, each with the end away from it. */
+function wiresAt(session: Session, pin: Pin): ReadonlyArray<{ wire: List; far: Point }> {
+  return all(session.root, "wire").flatMap((wire) => {
+    const [a, b] = ends(wire);
+    if (!a || !b || (!same(a, pin.at) && !same(b, pin.at))) return [];
+    return [{ wire, far: same(a, pin.at) ? b : a }];
+  });
+}
+
+/** Whether a pin is wired by hand: by a wire that does not end in a label or power symbol. */
+function drawnByHand(session: Session, pin: Pin): boolean {
+  return (
+    all(session.root, "wire").some((wire) => insideWire(pin.at, wire)) ||
+    wiresAt(session, pin).some(({ far }) => namesAt(session, far).length === 0)
+  );
+}
+
+/**
+ * Takes a part's short wires off the sheet and returns the net of each pin.
+ * Two parts may share the label where their short wires meet; it goes with the last of them.
+ */
+function unhook(session: Session, pins: ReadonlyArray<Pin>): Record<string, string> {
+  const nets: Record<string, string> = {};
+  for (const pin of pins) {
+    for (const marker of all(session.root, "no_connect")) {
+      if (same(positionOf(marker), pin.at)) removeNode(session, marker);
+    }
+    for (const { wire, far } of wiresAt(session, pin)) {
+      const names = namesAt(session, far);
+      const first = names[0];
+      if (!first) continue;
+      nets[pin.number] =
+        head(first) === "label" ? text(first[1]) : text(propertyOf(first, "Value")?.[2]);
+      removeNode(session, wire);
+      const shared = all(session.root, "wire").some((other) =>
+        ends(other).some((point) => same(point, far)),
+      );
+      if (!shared) for (const name of names) removeNode(session, name);
+    }
+  }
+  return nets;
+}
+
+const GROUND = /^\/?[ADP]?GND|^\/?VSS/i;
+const isRail = (session: Session, net: string) =>
+  session.context.symbol(`power:${net}`) !== undefined ||
+  (find(session.root, "lib_symbols")?.some(
+    (entry) => isList(entry) && text(entry[1]) === `power:${net}`,
+  ) ??
+    false);
+
+/**
+ * How a two-pin part should stand: between a rail above and ground below when
+ * it hangs off one, else lying flat with pin 1 on the left.
+ */
+function standing(
+  session: Session,
+  library: ReadonlyArray<Node>,
+  mirror: Mirror | undefined,
+  nets: Readonly<Record<string, string>>,
+  rotation: number,
+): number {
+  const pins = placedPins(library, { x: 0, y: 0 }, 0, mirror);
+  const [first, second] = pins;
+  if (pins.length !== 2 || !first || !second) return rotation;
+  const ground = pins.filter((pin) => GROUND.test(nets[pin.number] ?? ""));
+  const rails = pins.filter(
+    (pin) => !GROUND.test(nets[pin.number] ?? "") && isRail(session, nets[pin.number] ?? ""),
+  );
+  const down = ground.length === 1 ? ground[0] : undefined;
+  const up = !down && rails.length === 1 ? rails[0] : undefined;
+  for (const turn of [0, 90, 180, 270]) {
+    const turned = placedPins(library, { x: 0, y: 0 }, turn, mirror);
+    const out = (pin: Pin) => turned.find((other) => other.number === pin.number)?.out;
+    if (down ? (out(down)?.y ?? 0) > 0 : up ? (out(up)?.y ?? 0) < 0 : (out(first)?.x ?? 0) < 0) {
+      return turn;
+    }
+  }
+  return rotation;
+}
+
+/** Which stage of the signal's way across the sheet a block belongs to: in, core, out. */
+function stage(group: string): number {
+  if (/usb|connector|input|jack|batter|charg|power|supply|regulat|ldo|buck|boost/i.test(group)) {
+    return 0;
+  }
+  return /mcu|cpu|soc|core|processor|controller|esp32|stm32|module/i.test(group) ? 1 : 2;
+}
+
+const PAPERS: ReadonlyArray<readonly [string, number, number]> = [
+  ["A4", 297, 210],
+  ["A3", 420, 297],
+  ["A2", 594, 420],
+  ["A1", 841, 594],
+];
+/** Room kept clear inside the sheet's border, and above the title block at its foot. */
+const SHEET_EDGE = 15.24;
+const TITLE_BLOCK = 40.64;
+const FRAME_MARGIN = 5.08;
+const FRAME_GAP = 7.62;
+const FRAME_STROKE = "0.1524";
+const OTHER_BLOCK = "Other";
+const naturally = new Intl.Collator("en", { numeric: true }).compare;
+
+/**
+ * Lays the sheet out: each block framed and named, blocks in columns from power in
+ * to what the controller drives, big parts on a block's left and small ones in rows
+ * beside them. Blocks with wires drawn by hand are left exactly as they are.
+ */
+function tidy(session: Session, placed: Array<PlacedPart>): ReadonlyArray<string> {
+  interface Member {
+    readonly part: List;
+    readonly library: ReadonlyArray<Node>;
+    readonly pins: ReadonlyArray<Pin>;
+    readonly big: boolean;
+  }
+  const blocks = new Map<string, Array<Member>>();
+  const supply = [...groupAreas(session).keys()].find((name) => /power|supply/i.test(name));
+  for (const part of sheetSymbols(session.root)) {
+    const reference = referenceOf(part);
+    if (reference.startsWith("#PWR")) continue;
+    const named = text(propertyOf(part, GROUP_PROPERTY)?.[2]);
+    const group = named || (reference.startsWith("#FLG") && supply) || OTHER_BLOCK;
+    const library = embedded(session, text(find(part, "lib_id")?.[1]));
+    const pins = pinsOfPart(session, part);
+    blocks.set(group, [
+      ...(blocks.get(group) ?? []),
+      { part, library, pins, big: pins.length > 3 },
+    ]);
+  }
+  const kept = [...blocks].filter(([, members]) =>
+    members.some((member) => member.pins.some((pin) => drawnByHand(session, pin))),
+  );
+  for (const [name] of kept) blocks.delete(name);
+  if (blocks.size === 0) {
+    throw refuse(
+      "Every block has wires drawn by hand, and tidying would pull those apart. Nothing was moved.",
+    );
+  }
+
+  // Everything comes off the sheet before anything goes back, so no part lands on another's wires.
+  const names = new Set(blocks.keys());
+  for (const node of session.root.slice()) {
+    if (!isList(node)) continue;
+    const stroke = find(node, "stroke") ?? [];
+    const framed =
+      head(node) === "rectangle" &&
+      text(find(stroke, "type")?.[1]) === "dash" &&
+      text(find(stroke, "width")?.[1]) === FRAME_STROKE;
+    if (framed || (head(node) === "text" && names.has(text(node[1])))) removeNode(session, node);
+  }
+  const loose = new Map<List, { nets: Record<string, string>; open: ReadonlyArray<string> }>();
+  for (const members of blocks.values()) {
+    for (const { part, pins } of members) {
+      const open = markedUnconnected(session, pins);
+      loose.set(part, { nets: unhook(session, pins), open });
+    }
+  }
+
+  // Each block on its own: big parts in a column, small ones in rows to their right.
+  const laid = [...blocks].map(([name, members]) => {
+    const sized = [...members]
+      .sort((a, b) => naturally(referenceOf(a.part), referenceOf(b.part)))
+      .map((member) => {
+        const nets = loose.get(member.part)?.nets ?? {};
+        const mirror = mirrorOf(member.part);
+        const now = num(find(member.part, "at")?.[3]);
+        const rotation = member.big ? now : standing(session, member.library, mirror, nets, now);
+        return { ...member, rotation, box: footprintBox(member.library, rotation, mirror, nets) };
+      });
+    const big = sized.filter((member) => member.big).sort((a, b) => b.pins.length - a.pins.length);
+    const small = sized.filter((member) => !member.big);
+    const spots: Array<{ member: (typeof sized)[number]; x: number; y: number }> = [];
+    let height = 0;
+    let width = 0;
+    for (const member of big) {
+      spots.push({ member, x: -member.box.minX, y: height - member.box.minY });
+      width = Math.max(width, member.box.maxX - member.box.minX);
+      height += member.box.maxY - member.box.minY + 2 * SPACING;
+    }
+    height = Math.max(0, height - 2 * SPACING);
+    if (small.length > 0) {
+      const tallest = Math.max(...small.map(({ box }) => box.maxY - box.minY)) + SPACING;
+      // As many rows as the big parts are tall, and never a row longer than four.
+      const beside = big.length > 0 ? Math.floor((height + SPACING) / tallest) : 1;
+      const rows = Math.min(small.length, Math.max(1, beside, Math.ceil(small.length / 4)));
+      const columns = Math.ceil(small.length / rows);
+      // Each column is as wide, and each row as tall, as the largest part in it.
+      const widths = Array.from({ length: columns }, () => 0);
+      const heights = Array.from({ length: Math.ceil(small.length / columns) }, () => 0);
+      small.forEach(({ box }, index) => {
+        const column = index % columns;
+        const row = Math.floor(index / columns);
+        widths[column] = Math.max(widths[column] ?? 0, box.maxX - box.minX);
+        heights[row] = Math.max(heights[row] ?? 0, box.maxY - box.minY);
+      });
+      const before = (sizes: ReadonlyArray<number>, index: number) =>
+        sizes.slice(0, index).reduce((sum, size) => sum + size + SPACING, 0);
+      const left = big.length > 0 ? width + 2 * SPACING : 0;
+      small.forEach((member, index) => {
+        const column = index % columns;
+        const slack = (widths[column] ?? 0) - (member.box.maxX - member.box.minX);
+        spots.push({
+          member,
+          x: left + before(widths, column) + slack / 2 - member.box.minX,
+          y: before(heights, Math.floor(index / columns)) - member.box.minY,
+        });
+      });
+      width = left + before(widths, columns) - SPACING;
+      height = Math.max(height, before(heights, heights.length) - SPACING);
+    }
+    return {
+      name,
+      spots,
+      width: width + 2 * FRAME_MARGIN,
+      height: height + 2 * FRAME_MARGIN + 2 * TITLE,
+    };
+  });
+  const order = [...laid].sort((a, b) => stage(a.name) - stage(b.name));
+
+  // What stays as drawn keeps the top of the sheet; the tidy blocks start below it.
+  let top = SHEET_EDGE;
+  for (const [, members] of kept) {
+    for (const { part } of members) top = Math.max(top, symbolBox(session, part).maxY + GROUP_GAP);
+  }
+  // Columns from left to right, a new one for each stage and whenever one is full.
+  const columnsOn = (sheetHeight: number) => {
+    const bottom = sheetHeight - SHEET_EDGE - TITLE_BLOCK;
+    const frames: Array<{ block: (typeof order)[number]; x: number; y: number }> = [];
+    let x = SHEET_EDGE;
+    let y = top;
+    let wide = 0;
+    let before: (typeof order)[number] | undefined;
+    for (const block of order) {
+      const full = y > top && y + block.height > bottom;
+      if (before && (full || stage(before.name) !== stage(block.name))) {
+        x += wide + FRAME_GAP;
+        y = top;
+        wide = 0;
+      }
+      frames.push({ block, x: snap(x), y: snap(y) });
+      wide = Math.max(wide, block.width);
+      y += block.height + FRAME_GAP;
+      before = block;
+    }
+    return {
+      frames,
+      right: x + wide,
+      bottom: Math.max(...frames.map(({ block, y: at }) => at + block.height)),
+    };
+  };
+  const fitting = PAPERS.map(([paper, sheetWidth, sheetHeight]) => ({
+    paper,
+    ...columnsOn(sheetHeight),
+    fits: (layout: { right: number; bottom: number }) =>
+      layout.right <= sheetWidth - SHEET_EDGE &&
+      layout.bottom <= sheetHeight - SHEET_EDGE - TITLE_BLOCK,
+  }));
+  const chosen = fitting.find((layout) => layout.fits(layout)) ?? fitting.at(-1);
+  if (!chosen) throw refuse("The sheet could not be laid out.");
+  const paper = find(session.root, "paper");
+  if (paper) paper[1] = quoted(chosen.paper);
+
+  let count = 0;
+  for (const { block, x, y } of chosen.frames) {
+    insert(session, [
+      "rectangle",
+      ["start", numeric(x), numeric(y)],
+      ["end", numeric(snap(x + block.width)), numeric(snap(y + block.height))],
+      ["stroke", ["width", FRAME_STROKE], ["type", "dash"]],
+      ["fill", ["type", "none"]],
+      ["uuid", quoted(session.context.uuid())],
+    ]);
+    insert(session, [
+      "text",
+      quoted(block.name),
+      ["exclude_from_sim", "no"],
+      ["at", numeric(x + GRID), numeric(y + TITLE + GRID), "0"],
+      [
+        "effects",
+        ["font", ["size", numeric(TITLE), numeric(TITLE)]],
+        ["justify", "left", "bottom"],
+      ],
+      ["uuid", quoted(session.context.uuid())],
+    ]);
+    for (const { member, x: dx, y: dy } of block.spots) {
+      const held = loose.get(member.part);
+      settle(
+        session,
+        member.part,
+        { x: snap(x + FRAME_MARGIN + dx), y: snap(y + FRAME_MARGIN + 2 * TITLE + dy) },
+        member.rotation,
+        mirrorOf(member.part),
+        held?.nets ?? {},
+        held?.open ?? [],
+        placed,
+      );
+      count++;
+    }
+  }
+  return [
+    `Tidied the schematic: ${chosen.frames.length} blocks framed and set in order, ${count} parts aligned, on an ${chosen.paper} sheet`,
+    ...(kept.length > 0
+      ? [
+          `Left ${kept.map(([name]) => name).join(", ")} as drawn: wires drawn by hand would be pulled apart`,
+        ]
+      : []),
+  ];
 }
 
 const ERASABLE = new Set(["wire", "label", "global_label", "junction", "no_connect"]);
@@ -1037,6 +1385,9 @@ export function applySchematicEdits(
         summary.push(`Removed ${referenceOf(part)} (${text(propertyOf(part, "Value")?.[2])})`);
         break;
       }
+      case "tidy":
+        summary.push(...tidy(session, placed));
+        break;
       case "set":
         setProperty(session, edit);
         summary.push(`Set ${edit.reference} ${edit.property.trim()} to ${edit.value}`);

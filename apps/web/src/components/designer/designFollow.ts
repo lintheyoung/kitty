@@ -12,6 +12,7 @@ export type DesignPage = "schematic" | "board";
 
 const PAGE_OF_TOOL: Readonly<Record<string, DesignPage>> = {
   sch_edit: "schematic",
+  sch_tidy: "schematic",
   kicad_erc: "schematic",
   pcb_sync: "board",
   pcb_edit: "board",

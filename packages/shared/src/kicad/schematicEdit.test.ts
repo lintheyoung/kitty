@@ -160,6 +160,80 @@ describe("schematic edits", () => {
     expect(result.source.split('(property "Group" "Power"').length - 1).toBe(3);
   });
 
+  it("tidies the sheet into framed blocks without changing a connection", () => {
+    const part = (group: string, nets: Record<string, string>) => ({
+      op: "place" as const,
+      symbol: "jlc:R",
+      group,
+      nets,
+    });
+    const drawn = applySchematicEdits(
+      BLANK,
+      [
+        part("LED", { "1": "LED", "2": "LED_A" }),
+        part("MCU", { "1": "+3V3", "2": "GND" }),
+        part("Power", { "1": "EN", "2": "GND" }),
+        part("Power", { "1": "+3V3", "2": "EN" }),
+      ],
+      context(),
+    );
+    const again = () => ({
+      ...context(),
+      uuid: (
+        (n) => () =>
+          `00000000-0000-0000-0002-${String(++n).padStart(12, "0")}`
+      )(0),
+    });
+    const tidied = applySchematicEdits(drawn.source, [{ op: "tidy" }], again());
+    expect(netsOf(tidied.source)).toEqual(netsOf(drawn.source));
+    expect(tidied.summary).toEqual([
+      "Tidied the schematic: 3 blocks framed and set in order, 4 parts aligned, on an A4 sheet",
+    ]);
+    // Blocks read from power in, through the controller, to what it drives.
+    expect(tidied.source.split("(type dash)").length - 1).toBe(3);
+    const titleAt = (name: string) =>
+      Number(new RegExp(`\\(text "${name}"[\\s\\S]*?\\(at (\\S+) `).exec(tidied.source)?.[1]);
+    expect(titleAt("Power")).toBeLessThan(titleAt("MCU"));
+    expect(titleAt("MCU")).toBeLessThan(titleAt("LED"));
+    // A part between a rail and ground stands with the rail up; one between signals lies flat.
+    const turn = Object.fromEntries(tidied.placed.map((placed) => [placed.reference, placed]));
+    expect(turn.R1?.rotation).toBe(0);
+    expect(turn.R2?.rotation === 90 || turn.R2?.rotation === 270).toBe(true);
+    // Tidying again changes nothing but the ids of what it redraws.
+    const twice = applySchematicEdits(tidied.source, [{ op: "tidy" }], again());
+    expect(twice.source).toBe(tidied.source);
+  });
+
+  it("leaves a block with wires drawn by hand as it is", () => {
+    const drawn = applySchematicEdits(
+      BLANK,
+      [
+        { op: "place", symbol: "jlc:R", group: "Hand", at: { x: 50.8, y: 50.8 } },
+        {
+          op: "wire",
+          points: [
+            { x: 55.88, y: 50.8 },
+            { x: 76.2, y: 50.8 },
+          ],
+        },
+        { op: "place", symbol: "jlc:R", group: "Auto", nets: { "1": "+3V3", "2": "GND" } },
+      ],
+      context(),
+    );
+    const tidied = applySchematicEdits(drawn.source, [{ op: "tidy" }], context());
+    expect(tidied.summary.at(-1)).toBe(
+      "Left Hand as drawn: wires drawn by hand would be pulled apart",
+    );
+    expect(tidied.placed.map((placed) => placed.reference)).toEqual(["R2"]);
+    expect(() =>
+      applySchematicEdits(
+        applySchematicEdits(drawn.source, [{ op: "remove", reference: "R2" }], context()).source,
+        [{ op: "tidy" }],
+        context(),
+      ),
+    ).toThrow(SchematicEditError);
+  });
+
   it("moves a part with its connections and removes them with the part", () => {
     const placed = applySchematicEdits(
       BLANK,
