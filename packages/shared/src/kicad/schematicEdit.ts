@@ -1334,7 +1334,7 @@ function tidy(session: Session, placed: Array<PlacedPart>): ReadonlyArray<string
     const small = [
       ...groups.map((group) => ({
         ...ladder(session, group),
-        first: [...group.map((link) => referenceOf(link.member.part))].sort(naturally)[0] ?? "",
+        first: group.map((link) => referenceOf(link.member.part)).sort(naturally)[0] ?? "",
       })),
       ...members.filter((member) => !member.big && !drawn.has(member)).map(alone),
     ].sort(byReference);
