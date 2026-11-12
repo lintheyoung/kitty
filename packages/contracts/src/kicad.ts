@@ -217,6 +217,14 @@ const BoardPoint = Schema.Struct({ x: Schema.Number, y: Schema.Number }).annotat
   description: "A point on the board in millimetres; y grows downwards.",
 });
 
+/** A place on the board: a point, or the centre of a pad named like "U1.3". */
+const BoardSpot = Schema.Union([
+  BoardPoint,
+  Schema.Struct({
+    pad: Schema.String.annotate({ description: "A pad as REF.NUMBER, e.g. U1.3." }),
+  }),
+]);
+
 /** One change to a board. */
 export const BoardEdit = Schema.Union([
   Schema.Struct({
@@ -237,6 +245,35 @@ export const BoardEdit = Schema.Union([
     width: Schema.Number,
     height: Schema.Number,
   }).annotate({ description: "Make the board a rectangle; replaces the outline it has." }),
+  Schema.Struct({
+    op: Schema.Literal("track"),
+    points: Schema.Array(BoardSpot).annotate({
+      description: "The corners of the track in order, at least two; pads by name or points.",
+    }),
+    layer: Schema.optional(
+      Schema.String.annotate({ description: "Copper layer, F.Cu (default) or B.Cu." }),
+    ),
+    width: Schema.optional(
+      Schema.Number.annotate({ description: "Millimetres; the net's usual width when absent." }),
+    ),
+    net: Schema.optional(
+      Schema.String.annotate({ description: "Needed only when the track starts on bare board." }),
+    ),
+  }).annotate({ description: "Draw a track. Refused if it would touch another net." }),
+  Schema.Struct({
+    op: Schema.Literal("via"),
+    at: BoardSpot,
+    net: Schema.optional(Schema.String),
+  }).annotate({ description: "Join the front and back copper at a point." }),
+  Schema.Struct({
+    op: Schema.Literal("unroute"),
+    net: Schema.optional(
+      Schema.String.annotate({ description: "Remove every track and via of this net." }),
+    ),
+    ids: Schema.optional(
+      Schema.Array(Schema.String).annotate({ description: "Remove these tracks and vias." }),
+    ),
+  }),
 ]);
 export type BoardEdit = typeof BoardEdit.Type;
 
@@ -247,6 +284,11 @@ export const BoardEditInput = Schema.Struct({
   edits: Schema.Array(BoardEdit).annotate({
     description: "Applied in order, all or none. Leave empty to only read the board.",
   }),
+  nets: Schema.optional(
+    Schema.Array(Schema.String).annotate({
+      description: "Nets to describe in the reply: where their pads, tracks and vias are.",
+    }),
+  ),
 });
 export type BoardEditInput = typeof BoardEditInput.Type;
 
@@ -268,6 +310,30 @@ export const BoardPart = Schema.Struct({
 });
 export type BoardPart = typeof BoardPart.Type;
 
+/** Where one net's copper is, for routing it. */
+export const BoardNet = Schema.Struct({
+  net: Schema.String,
+  pads: Schema.Array(
+    Schema.Struct({
+      pad: Schema.String,
+      at: BoardPoint,
+      /** The copper a track can reach the pad on. */
+      side: Schema.Literals(["front", "back", "both"]),
+    }),
+  ),
+  tracks: Schema.Array(
+    Schema.Struct({
+      id: Schema.String,
+      layer: Schema.String,
+      width: Schema.Number,
+      from: BoardPoint,
+      to: BoardPoint,
+    }),
+  ),
+  vias: Schema.Array(Schema.Struct({ id: Schema.String, at: BoardPoint })),
+});
+export type BoardNet = typeof BoardNet.Type;
+
 export const BoardEditResult = Schema.Struct({
   board: Schema.String,
   /** What the edits did, one line each. */
@@ -285,6 +351,13 @@ export const BoardEditResult = Schema.Struct({
   parts: Schema.Array(BoardPart),
   /** Pairs of parts on the same side whose bodies overlap. */
   overlaps: Schema.Array(Schema.Tuple([Schema.String, Schema.String])),
+  /** Pairs of pads still to be joined by a track, nearest first within each net. */
+  toRoute: Schema.Array(
+    Schema.Struct({ net: Schema.String, from: Schema.String, to: Schema.String }),
+  ),
+  /** How many connections are left in all; `toRoute` may list fewer. */
+  unrouted: Schema.Int,
+  nets: Schema.optional(Schema.Array(BoardNet)),
 });
 export type BoardEditResult = typeof BoardEditResult.Type;
 

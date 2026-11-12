@@ -15,22 +15,50 @@ export interface CanvasState {
   readonly onMove?: ((item: SceneItem, by: Point) => void) | undefined;
   /** The grid dragged items land on, in millimetres; the schematic grid when absent. */
   readonly moveGrid?: number | undefined;
-  /** When set, clicks draw a wire; it is reported when it reaches a pin or is ended. */
-  readonly onWire?: ((points: ReadonlyArray<Point>) => void) | undefined;
+  /**
+   * When set, clicks draw a wire or a track; it is reported when it reaches a
+   * pin or pad or is ended. On a board, V ends it with a via.
+   */
+  readonly onWire?:
+    | ((points: ReadonlyArray<Point>, end: { readonly via: boolean }) => void)
+    | undefined;
 }
 
 const SNAP_PX = 9;
 const samePoint = (a: Point, b: Point) => Math.abs(a.x - b.x) < 1e-3 && Math.abs(a.y - b.y) < 1e-3;
 
-/** Where wires can attach: pin ends, wire ends and label anchors. */
-function attachPoints(scene: Scene): ReadonlyArray<Point> {
-  const points: Array<Point> = [];
+interface AttachPoint {
+  readonly point: Point;
+  /** The net of the copper there; only known on a board. */
+  readonly net?: string | undefined;
+}
+
+/**
+ * Where wires can attach: pin ends, wire ends and label anchors on a
+ * schematic; pad and via centres and track ends on a board.
+ */
+function attachPoints(scene: Scene): ReadonlyArray<AttachPoint> {
+  const points: Array<AttachPoint> = [];
   for (const item of scene.items) {
-    for (const pin of item.pins ?? []) points.push(pin.at);
-    if (item.anchor) points.push(item.anchor);
+    if (scene.kind === "board") {
+      if (!item.net) continue;
+      if (item.kind === "pad" || item.kind === "via") {
+        const { minX, minY, maxX, maxY } = item.box;
+        points.push({ point: { x: (minX + maxX) / 2, y: (minY + maxY) / 2 }, net: item.net });
+      } else if (item.kind === "track") {
+        for (const shape of item.shapes) {
+          if (shape.kind !== "line") continue;
+          for (const point of shape.points) points.push({ point, net: item.net });
+        }
+      }
+      continue;
+    }
+    for (const pin of item.pins ?? []) points.push({ point: pin.at });
+    if (item.anchor) points.push({ point: item.anchor });
     if (item.kind !== "wire") continue;
     for (const shape of item.shapes) {
-      if (shape.kind === "line") points.push(...shape.points);
+      if (shape.kind !== "line") continue;
+      for (const point of shape.points) points.push({ point });
     }
   }
   return points;
@@ -38,6 +66,8 @@ function attachPoints(scene: Scene): ReadonlyArray<Point> {
 
 /** Dragged parts land on the schematic grid. */
 const MOVE_GRID = 1.27;
+/** Free corners of a track land on this grid. */
+const ROUTE_GRID = 0.25;
 
 const DRAG_THRESHOLD_PX = 4;
 const PICK_TOLERANCE_PX = 4;
@@ -51,6 +81,12 @@ function isMouseWheel(event: WheelEvent): boolean {
   if (event.deltaMode !== WheelEvent.DOM_DELTA_PIXEL) return true;
   const legacy = (event as WheelEvent & { readonly wheelDeltaY?: number }).wheelDeltaY;
   return event.deltaX === 0 && legacy !== undefined && legacy !== 0 && Math.abs(legacy) % 120 === 0;
+}
+
+interface WirePoint {
+  readonly point: Point;
+  readonly attached: boolean;
+  readonly net?: string | undefined;
 }
 
 export class CanvasController {
@@ -67,7 +103,9 @@ export class CanvasController {
     | undefined;
   /** The wire being drawn, and where the pointer would put its next corner. */
   private wire: Array<Point> = [];
-  private hover: { readonly point: Point; readonly attached: boolean } | undefined;
+  /** The net of the track being drawn; it only snaps to copper of that net. */
+  private wireNet: string | undefined;
+  private hover: WirePoint | undefined;
   private readonly dispose: () => void;
 
   constructor(private readonly canvas: HTMLCanvasElement) {
@@ -158,6 +196,22 @@ export class CanvasController {
       if (this.state?.onWire) this.finishWire();
       else this.fit();
     };
+    const onKey = (event: KeyboardEvent) => {
+      if (!this.state?.onWire || this.wire.length === 0) return;
+      if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) {
+        return;
+      }
+      if (event.key === "Escape") {
+        this.wire = [];
+        this.wireNet = undefined;
+        this.schedule();
+      } else if (event.key.toLowerCase() === "v" && this.state.scene.kind === "board") {
+        event.preventDefault();
+        if (this.hover) this.wire.push(...this.legs(this.hover.point));
+        this.finishWire(true);
+      }
+    };
+    window.addEventListener("keydown", onKey);
     canvas.addEventListener("wheel", onWheel, { passive: false });
     canvas.addEventListener("pointerdown", onDown);
     canvas.addEventListener("pointermove", onMove);
@@ -166,6 +220,7 @@ export class CanvasController {
     canvas.addEventListener("dblclick", onDouble);
     this.dispose = () => {
       stopObserving();
+      window.removeEventListener("keydown", onKey);
       canvas.removeEventListener("wheel", onWheel);
       canvas.removeEventListener("pointerdown", onDown);
       canvas.removeEventListener("pointermove", onMove);
@@ -185,6 +240,7 @@ export class CanvasController {
     this.state = state;
     if (!state.onWire) {
       this.wire = [];
+      this.wireNet = undefined;
       this.hover = undefined;
     }
     // A different drawing starts framed; the same one re-read keeps the user's view.
@@ -227,38 +283,55 @@ export class CanvasController {
   }
 
   /** The pointer's place for a wire: a nearby pin or wire end, else the grid. */
-  private wirePoint(event: PointerEvent): { readonly point: Point; readonly attached: boolean } {
+  private wirePoint(event: PointerEvent): WirePoint {
     const rect = this.canvas.getBoundingClientRect();
     const at = {
       x: (event.clientX - rect.left - this.view.x) / this.view.scale,
       y: (event.clientY - rect.top - this.view.y) / this.view.scale,
     };
-    let best: Point | undefined;
+    let best: AttachPoint | undefined;
     let reach = SNAP_PX / this.view.scale;
-    for (const point of this.state ? attachPoints(this.state.scene) : []) {
-      const distance = Math.hypot(point.x - at.x, point.y - at.y);
+    for (const candidate of this.state ? attachPoints(this.state.scene) : []) {
+      if (this.wireNet && candidate.net !== this.wireNet) continue;
+      const distance = Math.hypot(candidate.point.x - at.x, candidate.point.y - at.y);
       if (distance <= reach) {
-        best = point;
+        best = candidate;
         reach = distance;
       }
     }
-    if (best) return { point: best, attached: true };
-    const grid = (value: number) =>
-      Math.round(Math.round(value / MOVE_GRID) * MOVE_GRID * 1e4) / 1e4;
+    if (best) return { point: best.point, attached: true, net: best.net };
+    const step = this.state?.scene.kind === "board" ? ROUTE_GRID : MOVE_GRID;
+    const grid = (value: number) => Math.round(Math.round(value / step) * step * 1e4) / 1e4;
     return { point: { x: grid(at.x), y: grid(at.y) }, attached: false };
   }
 
-  /** The straight runs from the wire's end to `point`: across first, then up or down. */
+  /**
+   * The runs from the wire's end to `point`. A schematic wire goes across,
+   * then up or down; a track goes straight, then at 45 degrees.
+   */
   private legs(point: Point): ReadonlyArray<Point> {
     const last = this.wire.at(-1);
     if (!last || samePoint(last, point)) return [];
+    if (this.state?.scene.kind === "board") {
+      const dx = point.x - last.x;
+      const dy = point.y - last.y;
+      const slant = Math.min(Math.abs(dx), Math.abs(dy));
+      const bend =
+        Math.abs(dx) >= Math.abs(dy)
+          ? { x: point.x - Math.sign(dx) * slant, y: last.y }
+          : { x: last.x, y: point.y - Math.sign(dy) * slant };
+      return samePoint(bend, last) || samePoint(bend, point) ? [point] : [bend, point];
+    }
     const corner = { x: point.x, y: last.y };
     return samePoint(corner, last) || samePoint(corner, point) ? [point] : [corner, point];
   }
 
-  private extendWire(next: { readonly point: Point; readonly attached: boolean }): void {
+  private extendWire(next: WirePoint): void {
     if (this.wire.length === 0) {
+      // A track has to start on copper, which gives it its net.
+      if (this.state?.scene.kind === "board" && !next.attached) return;
       this.wire = [next.point];
+      this.wireNet = next.net;
       this.schedule();
       return;
     }
@@ -269,11 +342,12 @@ export class CanvasController {
     else this.schedule();
   }
 
-  private finishWire(): void {
+  private finishWire(via = false): void {
     const points = this.wire;
     this.wire = [];
+    this.wireNet = undefined;
     this.schedule();
-    if (points.length >= 2) this.state?.onWire?.(points);
+    if (points.length >= 2) this.state?.onWire?.(points, { via });
   }
 
   private drawWire(ctx: CanvasRenderingContext2D): void {

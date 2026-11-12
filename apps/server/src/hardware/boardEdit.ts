@@ -1,5 +1,9 @@
-/** Changing a board: moving parts and setting its outline, with KiCad's own Python writing the file. */
-import type { BoardEdit, BoardPart } from "@t3tools/contracts";
+/** Changing a board: placing parts, its outline and its tracks, with KiCad's own Python writing the file. */
+import type { BoardEdit, BoardNet, BoardPart } from "@t3tools/contracts";
+import { buildBoardScene } from "@t3tools/shared/kicad/boardScene";
+import { sameNet } from "@t3tools/shared/kicad/pick";
+import { ratsnest } from "@t3tools/shared/kicad/ratsnest";
+import type { Box, Point, SceneItem } from "@t3tools/shared/kicad/scene";
 
 /** The job file the script reads. */
 export const boardEditJob = (board: string, edits: ReadonlyArray<BoardEdit>): string =>
@@ -12,6 +16,74 @@ export interface BoardEditReport {
   readonly parts: ReadonlyArray<BoardPart>;
   /** Pairs of parts on the same side whose bodies overlap. */
   readonly overlaps: ReadonlyArray<readonly [string, string]>;
+}
+
+const round = (value: number) => Math.round(value * 1000) / 1000;
+const centre = (box: Box): Point => ({
+  x: round((box.minX + box.maxX) / 2),
+  y: round((box.minY + box.maxY) / 2),
+});
+const padName = (pad: SceneItem) => `${pad.ref ?? "?"}.${pad.number ?? "?"}`;
+
+/** How many connections `toRoute` lists at most. */
+const TO_ROUTE_LIMIT = 80;
+
+export interface BoardRouting {
+  readonly toRoute: ReadonlyArray<{ net: string; from: string; to: string }>;
+  readonly unrouted: number;
+  readonly nets: ReadonlyArray<BoardNet>;
+}
+
+/** What is left to route on a board, and where the copper of the nets asked about lies. */
+export function boardRouting(source: string, nets: ReadonlyArray<string> = []): BoardRouting {
+  const scene = buildBoardScene(source);
+  const pads = scene.items.filter((item) => item.kind === "pad" && item.net);
+  const padAt = new Map(
+    pads.map((pad) => {
+      const at = centre(pad.box);
+      return [`${pad.net}@${at.x},${at.y}`, padName(pad)] as const;
+    }),
+  );
+  const wires = ratsnest(scene);
+  const name = (net: string, point: Point) =>
+    padAt.get(`${net}@${round(point.x)},${round(point.y)}`) ?? `(${point.x}, ${point.y})`;
+  const wanted = (item: SceneItem, net: string) =>
+    item.net !== undefined && (item.net === net || sameNet(net, item.net));
+  return {
+    toRoute: wires.slice(0, TO_ROUTE_LIMIT).map((wire) => ({
+      net: wire.net,
+      from: name(wire.net, wire.from),
+      to: name(wire.net, wire.to),
+    })),
+    unrouted: wires.length,
+    nets: nets.map((net) => ({
+      net,
+      pads: pads
+        .filter((pad) => wanted(pad, net))
+        .map((pad) => ({
+          pad: padName(pad),
+          at: centre(pad.box),
+          side: pad.layer === "F.Cu" ? "front" : pad.layer === "B.Cu" ? "back" : "both",
+        })),
+      tracks: scene.items
+        .filter((item) => item.kind === "track" && wanted(item, net))
+        .flatMap((item) => {
+          const shape = item.shapes[0];
+          const ends =
+            shape?.kind === "line"
+              ? [shape.points[0], shape.points.at(-1)]
+              : shape?.kind === "arc"
+                ? [shape.start, shape.end]
+                : [];
+          const [from, to] = ends;
+          if (!shape || !from || !to || !("width" in shape)) return [];
+          return [{ id: item.id, layer: item.layer ?? "F.Cu", width: shape.width, from, to }];
+        }),
+      vias: scene.items
+        .filter((item) => item.kind === "via" && wanted(item, net))
+        .map((item) => ({ id: item.id, at: centre(item.box) })),
+    })),
+  };
 }
 
 const REPORT_MARK = "KITTY_BOARD ";
@@ -55,6 +127,7 @@ board = pcbnew.LoadBoard(job["board"])
 mm = pcbnew.FromMM
 to_mm = lambda value: round(pcbnew.ToMM(value), 3)
 summary = []
+removed = []
 
 def fail(message):
     print("KITTY_BOARD " + json.dumps({"error": message}))
@@ -67,6 +140,81 @@ def number(value):
 footprints = {}
 for fp in board.GetFootprints():
     footprints.setdefault(fp.GetReference(), fp)
+
+settings = board.GetDesignSettings()
+copper_layers = [layer for layer in board.GetEnabledLayers().CuStack()]
+
+def copper_layer(name):
+    layer = board.GetLayerID(name)
+    if layer < 0 or not pcbnew.IsCopperLayer(layer) or layer not in copper_layers:
+        fail("%s is not a copper layer of this board." % name)
+    return layer
+
+def where(position):
+    return "(%s, %s)" % (number(to_mm(position.x)), number(to_mm(position.y)))
+
+def pad_name(pad):
+    return "%s.%s" % (pad.GetParentFootprint().GetReference(), pad.GetNumber())
+
+def spot_name(spot):
+    return pad_name(spot[1]) if spot[1] is not None else where(spot[0])
+
+def spot_of(point):
+    """A point of an edit as (position, pad or None)."""
+    if "pad" not in point:
+        return (pcbnew.VECTOR2I(mm(point["x"]), mm(point["y"])), None)
+    ref, _, pin = point["pad"].rpartition(".")
+    fp = footprints.get(ref)
+    pad = fp.FindPadByNumber(pin) if fp is not None and pin else None
+    if pad is None:
+        fail("The board has no pad %s." % point["pad"])
+    return (pad.GetPosition(), pad)
+
+def find_net(name):
+    for candidate in (name, "/" + name):
+        net = board.FindNet(candidate)
+        if net is not None and net.GetNetCode() > 0:
+            return net
+    return None
+
+def net_for(name, spots, layer):
+    """The net of new copper: the one named, else that of what it starts on."""
+    if name:
+        net = find_net(name)
+        if net is None:
+            fail("The board has no net called %s." % name)
+        return net
+    for position, pad in spots:
+        if pad is not None and pad.GetNetCode() > 0:
+            return pad.GetNet()
+    position = spots[0][0]
+    for track in board.GetTracks():
+        if track.GetNetCode() > 0 and (layer is None or track.IsOnLayer(layer)) and track.HitTest(position):
+            return track.GetNet()
+    for fp in board.GetFootprints():
+        for pad in fp.Pads():
+            if pad.GetNetCode() > 0 and (layer is None or pad.IsOnLayer(layer)) and pad.HitTest(position):
+                return pad.GetNet()
+    return None
+
+def blocked(shape, layers, net):
+    """What copper of another net the shape would touch, or None."""
+    gap = settings.m_NetSettings.GetEffectiveNetClass(net.GetNetname()).GetClearance()
+    for layer in layers:
+        for fp in board.GetFootprints():
+            for pad in fp.Pads():
+                if pad.GetNetCode() == net.GetNetCode() or not pad.IsOnLayer(layer):
+                    continue
+                if shape.Collide(pad.GetEffectiveShape(layer), gap):
+                    return "%s (%s)" % (pad_name(pad), pad.GetNetname() or "no net")
+        for track in board.GetTracks():
+            if track.GetNetCode() == net.GetNetCode() or not track.IsOnLayer(layer):
+                continue
+            other = track.GetEffectiveShape(layer) if track.Type() == pcbnew.PCB_VIA_T else track.GetEffectiveShape()
+            if shape.Collide(other, gap):
+                return "a %s of %s at %s" % (
+                    "via" if track.Type() == pcbnew.PCB_VIA_T else "track", track.GetNetname(), where(track.GetPosition()))
+    return None
 
 for edit in job["edits"]:
     op = edit["op"]
@@ -105,6 +253,92 @@ for edit in job["edits"]:
         board.Add(shape)
         summary.append("Set the board outline to %s x %s mm at (%s, %s)" % (
             number(edit["width"]), number(edit["height"]), number(edit["x"]), number(edit["y"])))
+    elif op == "track":
+        layer = copper_layer(edit.get("layer", "F.Cu"))
+        spots = [spot_of(point) for point in edit["points"]]
+        if len(spots) < 2:
+            fail("A track needs at least two points.")
+        net = net_for(edit.get("net"), spots, layer)
+        if net is None:
+            fail("Say which net this track belongs to, or start it on a pad.")
+        for position, pad in spots:
+            if pad is None:
+                continue
+            if pad.GetNetCode() != net.GetNetCode():
+                fail("%s is on %s, not on %s." % (pad_name(pad), pad.GetNetname() or "no net", net.GetNetname()))
+            if not pad.IsOnLayer(layer):
+                fail("%s has no copper on %s. Bring the track over with a via." % (pad_name(pad), board.GetLayerName(layer)))
+        rules = settings.m_NetSettings.GetEffectiveNetClass(net.GetNetname())
+        width = mm(edit["width"]) if "width" in edit else rules.GetTrackWidth()
+        if width < settings.m_TrackMinWidth:
+            fail("A track must be at least %s mm wide." % number(to_mm(settings.m_TrackMinWidth)))
+        count = 0
+        length = 0
+        for (start, _), (end, _) in zip(spots, spots[1:]):
+            if start == end:
+                continue
+            track = pcbnew.PCB_TRACK(board)
+            track.SetStart(start)
+            track.SetEnd(end)
+            track.SetLayer(layer)
+            track.SetWidth(width)
+            track.SetNet(net)
+            hit = blocked(track.GetEffectiveShape(), [layer], net)
+            if hit:
+                fail("The track from %s to %s on %s would touch %s. Go around it or use the other side." % (
+                    where(start), where(end), board.GetLayerName(layer), hit))
+            board.Add(track)
+            count += 1
+            length += track.GetLength()
+        if count == 0:
+            fail("The track's points are all the same place.")
+        summary.append("Routed %s from %s to %s on %s (%s mm)" % (
+            net.GetNetname(), spot_name(spots[0]), spot_name(spots[-1]), board.GetLayerName(layer), number(to_mm(length))))
+    elif op == "via":
+        spot = spot_of(edit["at"])
+        net = net_for(edit.get("net"), [spot], None)
+        if net is None:
+            fail("Say which net this via belongs to, or put it at the end of a track.")
+        rules = settings.m_NetSettings.GetEffectiveNetClass(net.GetNetname())
+        via = pcbnew.PCB_VIA(board)
+        via.SetViaType(pcbnew.VIATYPE_THROUGH)
+        via.SetLayerPair(pcbnew.F_Cu, pcbnew.B_Cu)
+        via.SetPosition(spot[0])
+        via.SetWidth(pcbnew.F_Cu, rules.GetViaDiameter())
+        via.SetDrill(rules.GetViaDrill())
+        via.SetNet(net)
+        hit = blocked(via.GetEffectiveShape(pcbnew.F_Cu), copper_layers, net)
+        if hit:
+            fail("A via at %s would touch %s." % (where(spot[0]), hit))
+        board.Add(via)
+        summary.append("Added a via on %s at %s" % (net.GetNetname(), where(spot[0])))
+    elif op == "unroute":
+        ids = set(edit.get("ids") or [])
+        net = None
+        if edit.get("net"):
+            net = find_net(edit["net"])
+            if net is None:
+                fail("The board has no net called %s." % edit["net"])
+        if net is None and not ids:
+            fail("Say which net or which tracks to remove.")
+        gone = []
+        for track in list(board.GetTracks()):
+            uuid = track.m_Uuid.AsString()
+            if uuid in ids or (net is not None and track.GetNetCode() == net.GetNetCode()):
+                ids.discard(uuid)
+                gone.append(track.Type() == pcbnew.PCB_VIA_T)
+                board.Remove(track)
+                # Removed items are kept until the end: freeing one mid-run breaks KiCad's Python types.
+                removed.append(track)
+        if ids:
+            fail("The board has no track or via with the id %s." % sorted(ids)[0])
+        vias = sum(gone)
+        tracks = len(gone) - vias
+        if gone:
+            what = " and ".join(part for part in (
+                "%d track%s" % (tracks, "" if tracks == 1 else "s") if tracks else "",
+                "%d via%s" % (vias, "" if vias == 1 else "s") if vias else "") if part)
+            summary.append("Removed %s%s" % (what, " from " + net.GetNetname() if net is not None else ""))
     else:
         fail("Unknown board edit: %s" % op)
 

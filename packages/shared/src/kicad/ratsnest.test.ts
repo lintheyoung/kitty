@@ -62,4 +62,32 @@ describe("ratsnest", () => {
     );
     expect(spans(board)).toEqual(["SDA:10-30"]);
   });
+
+  it("counts a track that ends on the middle of another as joined", () => {
+    const stub: SceneItem = {
+      ...track("t2", 0, 0, "SDA"),
+      shapes: [
+        {
+          kind: "line",
+          points: [
+            { x: 15, y: 0 },
+            { x: 15, y: 5 },
+          ],
+          width: 0.2,
+          paint: "F.Cu",
+        },
+      ],
+    };
+    const far: SceneItem = {
+      ...pad("b", 15, "SDA"),
+      box: { minX: 14.5, minY: 4.5, maxX: 15.5, maxY: 5.5 },
+    };
+    expect(spans(scene(pad("a", 0, "SDA"), far, track("t1", 0, 30, "SDA"), stub))).toEqual([]);
+  });
+
+  it("does not join a pad to a track on the other side of the board", () => {
+    const back: SceneItem = { ...track("t", 0, 30, "SDA"), layer: "B.Cu" };
+    const front = (id: string, x: number): SceneItem => ({ ...pad(id, x, "SDA"), layer: "F.Cu" });
+    expect(spans(scene(front("a", 0), front("b", 30), back))).toEqual(["SDA:0-30"]);
+  });
 });

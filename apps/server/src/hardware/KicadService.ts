@@ -60,7 +60,7 @@ import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as SchemaIssue from "effect/SchemaIssue";
 
 import * as ProcessRunner from "../processRunner.ts";
-import { BOARD_EDIT_SCRIPT, boardEditJob, parseBoardReport } from "./boardEdit.ts";
+import { BOARD_EDIT_SCRIPT, boardEditJob, boardRouting, parseBoardReport } from "./boardEdit.ts";
 import {
   BOARD_SYNC_SCRIPT,
   boardSyncJob,
@@ -503,10 +503,13 @@ export const make = Effect.fn("KicadService.make")(function* () {
     const report = parseBoardReport(stdout);
     if (!report) return yield* failure("command_failed", boardUntouched(stdout));
     if ("error" in report) return yield* failure("invalid_argument", report.error);
+    const after =
+      report.summary.length > 0
+        ? yield* fs
+            .readFileString(file)
+            .pipe(Effect.mapError((cause) => failure("command_failed", cause.message)))
+        : before;
     if (report.summary.length > 0) {
-      const after = yield* fs
-        .readFileString(file)
-        .pipe(Effect.mapError((cause) => failure("command_failed", cause.message)));
       const history = historyOf(file, before);
       history.undo.push({ source: before, summary: report.summary });
       if (history.undo.length > HISTORY_LIMIT) history.undo.shift();
@@ -514,12 +517,16 @@ export const make = Effect.fn("KicadService.make")(function* () {
       history.current = after;
       yield* recordChange(path.dirname(file), input.by ?? "agent", report.summary);
     }
+    const routing = yield* parseOrFail(() => boardRouting(after, input.nets), "board");
     return {
       board: relative,
       summary: [...report.summary],
       ...(report.outline ? { outline: report.outline } : {}),
       parts: [...report.parts],
       overlaps: report.overlaps.map(([a, b]) => [a, b] as const),
+      toRoute: [...routing.toRoute],
+      unrouted: routing.unrouted,
+      ...(input.nets ? { nets: [...routing.nets] } : {}),
     } satisfies BoardEditResult;
   });
 

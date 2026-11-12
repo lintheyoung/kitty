@@ -43,8 +43,10 @@ export function DesignCanvas(props: {
   readonly onMove?: ((item: SceneItem, by: Point) => void) | undefined;
   /** The grid dragged items land on, in millimetres. */
   readonly moveGrid?: number | undefined;
-  /** When set, the canvas is in its wire tool and reports each wire drawn. */
-  readonly onWire?: ((points: ReadonlyArray<Point>) => void) | undefined;
+  /** When set, the canvas is in its wire tool and reports each wire or track drawn. */
+  readonly onWire?:
+    | ((points: ReadonlyArray<Point>, end: { readonly via: boolean }) => void)
+    | undefined;
   readonly className?: string;
 }) {
   const controller = useRef<CanvasController | null>(null);

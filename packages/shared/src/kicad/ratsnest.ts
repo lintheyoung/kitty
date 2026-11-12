@@ -30,6 +30,44 @@ function touchPoints(item: SceneItem): ReadonlyArray<Point> {
 
 const TOUCH = 0.05;
 
+/** The straight runs of a track; a via has none. */
+function runs(item: SceneItem): ReadonlyArray<readonly [Point, Point]> {
+  const result: Array<readonly [Point, Point]> = [];
+  for (const shape of item.shapes) {
+    if (shape.kind !== "line" || item.kind !== "track") continue;
+    for (let index = 1; index < shape.points.length; index++) {
+      const from = shape.points[index - 1];
+      const to = shape.points[index];
+      if (from && to) result.push([from, to]);
+    }
+  }
+  return result;
+}
+
+function distanceToRun(point: Point, [from, to]: readonly [Point, Point]): number {
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  const length = dx * dx + dy * dy;
+  const along =
+    length === 0
+      ? 0
+      : Math.max(0, Math.min(1, ((point.x - from.x) * dx + (point.y - from.y) * dy) / length));
+  return Math.hypot(point.x - (from.x + along * dx), point.y - (from.y + along * dy));
+}
+
+/** Whether two pieces of copper join: an end of one lies on the other, on a shared layer. */
+function copperMeets(a: SceneItem, b: SceneItem): boolean {
+  if (a.kind === "track" && b.kind === "track" && a.layer !== b.layer) return false;
+  const lands = (from: SceneItem, on: SceneItem) =>
+    touchPoints(from).some(
+      (point) =>
+        touchPoints(on).some(
+          (other) => Math.hypot(point.x - other.x, point.y - other.y) <= TOUCH,
+        ) || runs(on).some((run) => distanceToRun(point, run) <= TOUCH),
+    );
+  return lands(a, b) || lands(b, a);
+}
+
 /**
  * For each net, the shortest set of lines that would join everything not yet
  * joined by tracks. Nets with a copper zone are left out: the zone joins them.
@@ -56,9 +94,13 @@ export function ratsnest(scene: Scene): ReadonlyArray<Airwire> {
       return root;
     };
     const points = copper.map(touchPoints);
-    const padsAt = (spots: ReadonlyArray<Point>) =>
+    // A track reaches a pad only on the pad's own side; a via reaches either side.
+    const padsAt = (item: SceneItem, spots: ReadonlyArray<Point>) =>
       pads.flatMap((pad, index) =>
-        spots.some((spot) => within(spot, pad.box, TOUCH)) ? [index] : [],
+        (item.kind === "via" || !pad.layer || pad.layer === item.layer) &&
+        spots.some((spot) => within(spot, pad.box, TOUCH))
+          ? [index]
+          : [],
       );
     // Tracks that meet end to end carry a connection on to the pads at either end.
     const chain = copper.map((_, index) => index);
@@ -69,16 +111,15 @@ export function ratsnest(scene: Scene): ReadonlyArray<Airwire> {
     };
     for (let a = 0; a < copper.length; a++) {
       for (let b = a + 1; b < copper.length; b++) {
-        const meets = (points[a] ?? []).some((p) =>
-          (points[b] ?? []).some((q) => Math.hypot(p.x - q.x, p.y - q.y) <= TOUCH),
-        );
-        if (meets) chain[chainOf(a)] = chainOf(b);
+        const first = copper[a];
+        const second = copper[b];
+        if (first && second && copperMeets(first, second)) chain[chainOf(a)] = chainOf(b);
       }
     }
     const reached = new Map<number, Array<number>>();
-    copper.forEach((_, index) => {
+    copper.forEach((item, index) => {
       const root = chainOf(index);
-      reached.set(root, [...(reached.get(root) ?? []), ...padsAt(points[index] ?? [])]);
+      reached.set(root, [...(reached.get(root) ?? []), ...padsAt(item, points[index] ?? [])]);
     });
     for (const joined of reached.values()) {
       const [first, ...rest] = joined;

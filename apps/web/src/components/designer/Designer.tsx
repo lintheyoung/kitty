@@ -589,6 +589,7 @@ function DesignerView(props: {
   const [showProblems, setShowProblems] = useState(false);
   const [showParts, setShowParts] = useState(false);
   const [wiring, setWiring] = useState(false);
+  const [routeLayer, setRouteLayer] = useState<"F.Cu" | "B.Cu">("F.Cu");
   const [showSize, setShowSize] = useState(false);
   const [activeProblem, setActiveProblem] = useState<string | undefined>();
   const [sync, setSync] = useState<{ busy: boolean; note?: string; failed?: boolean }>({
@@ -682,7 +683,7 @@ function DesignerView(props: {
       if (checked) void runChecks();
     },
   );
-  // On the board, parts are moved, turned and flipped; tracks come later.
+  // On the board, parts are moved, turned and flipped, and tracks are drawn and removed.
   const boardEditable = scene?.kind === "board" && !showModel;
   const outline = boardEditable
     ? unionBoxes(scene.items.filter((item) => item.layer === "Edge.Cuts").map((item) => item.box))
@@ -706,14 +707,33 @@ function DesignerView(props: {
     /^[0-9a-f-]{36}$/i.test(selectedItem.id)
       ? selectedItem
       : undefined;
+  const copper =
+    boardEditable &&
+    selectedItem &&
+    (selectedItem.kind === "track" || selectedItem.kind === "via") &&
+    /^[0-9a-f-]{36}$/i.test(selectedItem.id)
+      ? selectedItem
+      : undefined;
   const removeSelected = () => {
-    if (selectedPart?.ref) {
+    if (copper) {
+      setSelection(undefined);
+      void editor.applyBoard([{ op: "unroute", ids: [copper.id] }]);
+    } else if (selectedPart?.ref) {
       setSelection(undefined);
       void editor.apply([{ op: "remove", reference: selectedPart.ref }]);
     } else if (erasable) {
       setSelection(undefined);
       void editor.apply([{ op: "erase", id: erasable.id }]);
     }
+  };
+  /** Draws a track on the side being routed; with a via at its end, routing moves to the other side. */
+  const route = async (points: ReadonlyArray<{ x: number; y: number }>, via: boolean) => {
+    const end = points.at(-1);
+    const done = await editor.applyBoard([
+      { op: "track", layer: routeLayer, points: [...points] },
+      ...(via && end ? [{ op: "via" as const, at: end }] : []),
+    ]);
+    if (done && via) setRouteLayer(routeLayer === "F.Cu" ? "B.Cu" : "F.Cu");
   };
   const rotateSelected = () => {
     if (selectedFootprint?.ref) {
@@ -736,6 +756,14 @@ function DesignerView(props: {
         event.preventDefault();
         const side = selectedFootprint.layer?.startsWith("B.") ? "front" : "back";
         void editor.applyBoard([{ op: "move", reference: selectedFootprint.ref, side }]);
+      } else if (!command && (event.key === "Delete" || event.key === "Backspace")) {
+        event.preventDefault();
+        removeSelected();
+      } else if (!command && event.key.toLowerCase() === "w") {
+        event.preventDefault();
+        setWiring((on) => !on);
+      } else if (event.key === "Escape") {
+        setWiring(false);
       }
       return;
     }
@@ -951,14 +979,23 @@ function DesignerView(props: {
             </Button>
           </>
         ) : null}
-        {editable ? (
+        {editable || boardEditable ? (
           <Button
             size="xs"
             variant={wiring ? "outline" : "ghost-muted"}
             onClick={() => setWiring((on) => !on)}
           >
             <PencilLineIcon />
-            Wire
+            {boardEditable ? "Route" : "Wire"}
+          </Button>
+        ) : null}
+        {boardEditable && wiring ? (
+          <Button
+            size="xs"
+            variant="ghost-muted"
+            onClick={() => setRouteLayer((layer) => (layer === "F.Cu" ? "B.Cu" : "F.Cu"))}
+          >
+            {routeLayer === "F.Cu" ? "Front copper" : "Back copper"}
           </Button>
         ) : null}
         {editable && project ? (
@@ -1058,12 +1095,14 @@ function DesignerView(props: {
               onWire={
                 editable && wiring
                   ? (points) => void editor.apply([{ op: "wire", points: [...points] }])
-                  : undefined
+                  : boardEditable && wiring
+                    ? (points, end) => void route(points, end.via)
+                    : undefined
               }
               movable={
                 editable
                   ? isEditablePart
-                  : boardEditable
+                  : boardEditable && !wiring
                     ? (item) => item.kind === "footprint" && item.ref !== undefined
                     : undefined
               }
@@ -1232,9 +1271,15 @@ function DesignerView(props: {
             {sync.note}
           </span>
         ) : null}
-        {boardEditable && !sync.note ? (
+        {boardEditable && !sync.note && !wiring ? (
           <span className="shrink-0">
             Drag a part to move it. R turns it, F flips it to the other side.
+          </span>
+        ) : null}
+        {boardEditable && wiring ? (
+          <span className="shrink-0">
+            Click a pad to start a track, click to add corners, click a pad to finish. V drops a via
+            and changes side. Esc to stop.
           </span>
         ) : null}
         {editable && wiring ? (
