@@ -62,6 +62,7 @@ import {
   shownByDefault,
 } from "./scenePaint.ts";
 import { type Marker, scenePaints } from "./sceneRenderer.ts";
+import { useDesignFocusStore } from "./designFollow.ts";
 import { useDesignChecks, useDesignWatcher } from "./useDesignChecks.ts";
 import { useSchematicEditor } from "./useSchematicEditor.ts";
 
@@ -590,6 +591,15 @@ function DesignerView(props: {
   const [chosen, setChosen] = useState<string | null>(null);
   const project = list.find((design) => design.project === chosen)?.project ?? list[0]?.project;
   const [tab, setTab] = useState<string | null>(null);
+  const followed = useDesignFocusStore((state) =>
+    state.focus?.threadId === threadId ? state.focus.call : undefined,
+  );
+  // Each new tool call of the agent turns the designer to the page it changes.
+  const [turnedFor, setTurnedFor] = useState<string | undefined>();
+  if (followed && followed.id !== turnedFor) {
+    setTurnedFor(followed.id);
+    setTab(followed.page === "board" ? "board" : null);
+  }
   const [selection, setSelection] = useState<Selection | undefined>();
   const [reveal, setReveal] = useState<SceneItem | undefined>();
   const [toggled, setToggled] = useState<ReadonlySet<string>>(new Set());

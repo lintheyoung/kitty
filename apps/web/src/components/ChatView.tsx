@@ -1,3 +1,4 @@
+import { useDesignFollow } from "./designer/designFollow";
 import { ChildThreadApprovals } from "./chat/ChildThreadApprovals";
 import { workspaceAreaProps } from "../lib/workspaceFocus";
 import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
@@ -547,6 +548,7 @@ export default function ChatView(props: ChatViewProps) {
       },
     };
   })() as MessagesTimelineHistoryControls | undefined;
+  useDesignFollow(routeThreadDetailRef, serverVisibleTurnItems);
   const committedServerMessageIds = deriveCommittedServerUserMessageIds(serverVisibleTurnItems);
   // Queued messages have no turn item until starting, so cancellation must retire their optimistic rows
   // separately.

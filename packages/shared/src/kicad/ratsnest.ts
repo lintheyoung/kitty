@@ -68,16 +68,65 @@ function copperMeets(a: SceneItem, b: SceneItem): boolean {
   return lands(a, b) || lands(b, a);
 }
 
+/** One filled piece of a copper zone: everything of its net that lands on it is joined. */
+interface Pour {
+  readonly layer: string;
+  readonly points: ReadonlyArray<Point>;
+  readonly box: Box;
+}
+
+function pours(zone: SceneItem): ReadonlyArray<Pour> {
+  const result: Array<Pour> = [];
+  for (const shape of zone.shapes) {
+    if (shape.kind !== "polygon" || shape.fill === undefined || shape.points.length < 3) continue;
+    let box: Box = { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity };
+    for (const point of shape.points) {
+      box = {
+        minX: Math.min(box.minX, point.x),
+        minY: Math.min(box.minY, point.y),
+        maxX: Math.max(box.maxX, point.x),
+        maxY: Math.max(box.maxY, point.y),
+      };
+    }
+    result.push({ layer: shape.paint, points: shape.points, box });
+  }
+  return result;
+}
+
+/** Even-odd test, which also holds for KiCad's fills, where holes are cut in by slits. */
+function covers(pour: Pour, point: Point): boolean {
+  if (!within(point, pour.box, 0)) return false;
+  let inside = false;
+  const { points } = pour;
+  for (let index = 0, last = points.length - 1; index < points.length; last = index++) {
+    const a = points[index];
+    const b = points[last];
+    if (!a || !b || a.y > point.y === b.y > point.y) continue;
+    if (point.x < ((b.x - a.x) * (point.y - a.y)) / (b.y - a.y) + a.x) inside = !inside;
+  }
+  return inside;
+}
+
+/** A pad sits on a pour when its middle is covered, or a thermal spoke reaches into it. */
+const pourReachesPad = (pour: Pour, pad: SceneItem) =>
+  (!pad.layer || pad.layer === pour.layer) &&
+  pad.box.maxX >= pour.box.minX &&
+  pad.box.minX <= pour.box.maxX &&
+  pad.box.maxY >= pour.box.minY &&
+  pad.box.minY <= pour.box.maxY &&
+  (covers(pour, centre(pad.box)) || pour.points.some((point) => within(point, pad.box, 0)));
+
 /**
  * For each net, the shortest set of lines that would join everything not yet
- * joined by tracks. Nets with a copper zone are left out: the zone joins them.
+ * joined by tracks, vias and filled copper zones.
  */
 export function ratsnest(scene: Scene): ReadonlyArray<Airwire> {
   const byNet = new Map<string, { pads: Array<SceneItem>; copper: Array<SceneItem> }>();
-  const zoned = new Set<string>();
+  const filled = new Map<string, Array<Pour>>();
   for (const item of scene.items) {
     if (!item.net || item.net.startsWith("unconnected-")) continue;
-    if (item.kind === "zone") zoned.add(item.net);
+    if (item.kind === "zone")
+      filled.set(item.net, [...(filled.get(item.net) ?? []), ...pours(item)]);
     if (item.kind !== "pad" && item.kind !== "track" && item.kind !== "via") continue;
     const net = byNet.get(item.net) ?? { pads: [], copper: [] };
     (item.kind === "pad" ? net.pads : net.copper).push(item);
@@ -85,47 +134,48 @@ export function ratsnest(scene: Scene): ReadonlyArray<Airwire> {
   }
   const wires: Array<Airwire> = [];
   for (const [net, { pads, copper }] of byNet) {
-    if (pads.length < 2 || zoned.has(net)) continue;
-    // Islands of copper: pads start alone and tracks and vias merge what they touch.
-    const island = pads.map((_, index) => index);
+    if (pads.length < 2) continue;
+    // Islands of copper: pads, tracks, vias and pours start alone and merge where they touch.
+    const netPours = filled.get(net) ?? [];
+    const copperAt = pads.length;
+    const pourAt = copperAt + copper.length;
+    const island = Array.from({ length: pourAt + netPours.length }, (_, index) => index);
     const find = (index: number): number => {
       let root = index;
       while (island[root] !== root) root = island[root] ?? root;
       return root;
     };
-    const points = copper.map(touchPoints);
-    // A track reaches a pad only on the pad's own side; a via reaches either side.
-    const padsAt = (item: SceneItem, spots: ReadonlyArray<Point>) =>
-      pads.flatMap((pad, index) =>
-        (item.kind === "via" || !pad.layer || pad.layer === item.layer) &&
-        spots.some((spot) => within(spot, pad.box, TOUCH))
-          ? [index]
-          : [],
-      );
-    // Tracks that meet end to end carry a connection on to the pads at either end.
-    const chain = copper.map((_, index) => index);
-    const chainOf = (index: number): number => {
-      let root = index;
-      while (chain[root] !== root) root = chain[root] ?? root;
-      return root;
+    const join = (a: number, b: number) => {
+      island[find(a)] = find(b);
     };
-    for (let a = 0; a < copper.length; a++) {
-      for (let b = a + 1; b < copper.length; b++) {
-        const first = copper[a];
-        const second = copper[b];
-        if (first && second && copperMeets(first, second)) chain[chainOf(a)] = chainOf(b);
-      }
-    }
-    const reached = new Map<number, Array<number>>();
+    const points = copper.map(touchPoints);
     copper.forEach((item, index) => {
-      const root = chainOf(index);
-      reached.set(root, [...(reached.get(root) ?? []), ...padsAt(item, points[index] ?? [])]);
+      const spots = points[index] ?? [];
+      // A track reaches a pad only on the pad's own side; a via reaches either side.
+      pads.forEach((pad, padIndex) => {
+        if (
+          (item.kind === "via" || !pad.layer || pad.layer === item.layer) &&
+          spots.some((spot) => within(spot, pad.box, TOUCH))
+        )
+          join(copperAt + index, padIndex);
+      });
+      for (let other = index + 1; other < copper.length; other++) {
+        const second = copper[other];
+        if (second && copperMeets(item, second)) join(copperAt + index, copperAt + other);
+      }
+      netPours.forEach((pour, pourIndex) => {
+        if (
+          (item.kind === "via" || item.layer === pour.layer) &&
+          spots.some((spot) => covers(pour, spot))
+        )
+          join(copperAt + index, pourAt + pourIndex);
+      });
     });
-    for (const joined of reached.values()) {
-      const [first, ...rest] = joined;
-      if (first === undefined) continue;
-      for (const other of rest) island[find(other)] = find(first);
-    }
+    netPours.forEach((pour, pourIndex) => {
+      pads.forEach((pad, padIndex) => {
+        if (pourReachesPad(pour, pad)) join(pourAt + pourIndex, padIndex);
+      });
+    });
     // Join the islands with the shortest lines, nearest first.
     const centres = pads.map((pad) => centre(pad.box));
     for (;;) {
@@ -144,7 +194,7 @@ export function ratsnest(scene: Scene): ReadonlyArray<Airwire> {
       const from = centres[best.a];
       const to = centres[best.b];
       if (from && to) wires.push({ net, from, to });
-      island[find(best.a)] = find(best.b);
+      join(best.a, best.b);
     }
   }
   return wires;

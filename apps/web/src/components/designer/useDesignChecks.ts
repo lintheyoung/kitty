@@ -59,7 +59,7 @@ export function useDesignChecks(target: Target, hasSchematic: boolean, hasBoard:
   return { checks: current as DesignChecks, run };
 }
 
-const POLL_MS = 2500;
+const POLL_MS = 1000;
 
 /** Calls `onChange` when the design's files are saved by KiCad, the agent or anyone else. */
 export function useDesignWatcher(target: Target, onChange: () => void) {

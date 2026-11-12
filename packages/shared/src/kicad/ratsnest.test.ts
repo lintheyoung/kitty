@@ -44,8 +44,7 @@ describe("ratsnest", () => {
     ]);
   });
 
-  it("leaves out what tracks already join, and nets with one pad or a zone", () => {
-    const zone: SceneItem = { ...pad("z", 0, "GND"), kind: "zone" };
+  it("leaves out what tracks already join, and nets with one pad", () => {
     const board = scene(
       pad("a", 0, "SDA"),
       pad("b", 10, "SDA"),
@@ -54,13 +53,54 @@ describe("ratsnest", () => {
       track("t1", 0, 5, "SDA"),
       track("t2", 5, 10, "SDA"),
       pad("d", 50, "LED"),
-      pad("e", 60, "GND"),
-      pad("f", 70, "GND"),
-      zone,
       pad("g", 80, "unconnected-(U1-Pad3)"),
       pad("h", 90, "unconnected-(U1-Pad3)"),
     );
     expect(spans(board)).toEqual(["SDA:10-30"]);
+  });
+
+  it("joins what lies on the same filled piece of a zone, on its layer", () => {
+    const fill = (
+      id: string,
+      from: number,
+      to: number,
+      layer: string,
+      filled = true,
+    ): SceneItem => ({
+      id,
+      kind: "zone",
+      net: "GND",
+      layer,
+      box: { minX: from, minY: -5, maxX: to, maxY: 5 },
+      shapes: [
+        {
+          kind: "polygon",
+          points: [
+            { x: from, y: -5 },
+            { x: to, y: -5 },
+            { x: to, y: 5 },
+            { x: from, y: 5 },
+          ],
+          width: 0,
+          paint: layer,
+          ...(filled ? { fill: layer } : {}),
+        },
+      ],
+    });
+    const front = (id: string, x: number): SceneItem => ({ ...pad(id, x, "GND"), layer: "F.Cu" });
+    const via: SceneItem = { ...pad("v", 60, "GND"), kind: "via" };
+    // Two front pads on a front pour are joined; a pad off it is not.
+    expect(
+      spans(scene(front("a", 0), front("b", 20), front("c", 50), fill("z", -2, 30, "F.Cu"))),
+    ).toEqual(["GND:20-50"]);
+    // A back pour does not reach front pads, until vias bring them down to it.
+    const back = fill("z", -2, 70, "B.Cu");
+    expect(spans(scene(front("a", 0), front("b", 60), back))).toEqual(["GND:0-60"]);
+    const down: SceneItem = { ...pad("w", 0, "GND"), kind: "via" };
+    expect(spans(scene(front("a", 0), front("b", 60), back, via, down))).toEqual([]);
+    // An unfilled zone joins nothing.
+    const drawn = fill("z", -2, 70, "B.Cu", false);
+    expect(spans(scene(front("a", 0), front("b", 60), drawn, via, down))).toEqual(["GND:0-60"]);
   });
 
   it("counts a track that ends on the middle of another as joined", () => {

@@ -262,6 +262,58 @@ export const BoardEdit = Schema.Union([
     name: Schema.String,
   }),
   Schema.Struct({
+    op: Schema.Literal("pour"),
+    net: Schema.String.annotate({ description: "The net to fill with, usually GND." }),
+    layers: Schema.optional(
+      Schema.Array(Schema.String).annotate({
+        description: "Copper layers to fill; every copper layer when absent.",
+      }),
+    ),
+    x: Schema.optional(Schema.Number),
+    y: Schema.optional(Schema.Number),
+    width: Schema.optional(Schema.Number),
+    height: Schema.optional(Schema.Number),
+  }).annotate({
+    description:
+      "Fill the free copper with a net: the whole board, or the rectangle given. Replaces that net's pour on those layers. Pours are refilled after every edit.",
+  }),
+  Schema.Struct({
+    op: Schema.Literal("remove_pour"),
+    net: Schema.String,
+    layers: Schema.optional(Schema.Array(Schema.String)),
+  }),
+  Schema.Struct({
+    op: Schema.Literal("text"),
+    text: Schema.String,
+    x: Schema.Number,
+    y: Schema.Number,
+    side: Schema.optional(Schema.Literals(["front", "back"])),
+    size: Schema.optional(
+      Schema.Number.annotate({ description: "Letter height in millimetres; 1 when absent." }),
+    ),
+    rotation: Schema.optional(Schema.Number),
+  }).annotate({
+    description:
+      "Print text on the silkscreen, centred on the point: a name, version or pin label.",
+  }),
+  Schema.Struct({
+    op: Schema.Literal("remove_text"),
+    id: Schema.String.annotate({ description: "The id of a text from the reply's texts." }),
+  }),
+  Schema.Struct({
+    op: Schema.Literal("label"),
+    reference: Schema.String,
+    at: Schema.optional(BoardPoint),
+    rotation: Schema.optional(Schema.Number),
+    hidden: Schema.optional(Schema.Boolean),
+  }).annotate({ description: "Move, turn, hide or show one part's reference on the silkscreen." }),
+  Schema.Struct({
+    op: Schema.Literal("tidy_labels"),
+  }).annotate({
+    description:
+      "Put every part's reference beside its part at one readable size, clear of pads and of each other.",
+  }),
+  Schema.Struct({
     op: Schema.Literal("track"),
     points: Schema.Array(BoardSpot).annotate({
       description: "The corners of the track in order, at least two; pads by name or points.",
@@ -367,6 +419,24 @@ export const BoardEditResult = Schema.Struct({
   parts: Schema.Array(BoardPart),
   /** Pairs of parts on the same side whose bodies overlap. */
   overlaps: Schema.Array(Schema.Tuple([Schema.String, Schema.String])),
+  /** Copper fills, with the copper each really got; 0 means the fill found no room. */
+  pours: Schema.Array(
+    Schema.Struct({
+      net: Schema.String,
+      layer: Schema.String,
+      /** Filled copper in square millimetres. */
+      area: Schema.Number,
+    }),
+  ),
+  /** Free text on the silkscreen. */
+  texts: Schema.Array(
+    Schema.Struct({
+      id: Schema.String,
+      text: Schema.String,
+      at: BoardPoint,
+      side: Schema.Literals(["front", "back"]),
+    }),
+  ),
   /** Areas where tracks and vias may not go. */
   keepouts: Schema.Array(
     Schema.Struct({
@@ -394,6 +464,12 @@ export const BoardAutorouteInput = Schema.Struct({
   passes: Schema.optional(
     Schema.Int.annotate({
       description: "How many tries the router gets, 1 to 100; 20 when absent.",
+    }),
+  ),
+  finish: Schema.optional(
+    Schema.Boolean.annotate({
+      description:
+        "Afterwards pour GND over the free copper, unless the board has a pour, and tidy the references. True when absent.",
     }),
   ),
 });

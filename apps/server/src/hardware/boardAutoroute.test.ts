@@ -1,6 +1,7 @@
 import { assert, it } from "vite-plus/test";
 
 import {
+  finishingEdits,
   freeroutingArgs,
   javaCandidates,
   parseAutorouteReport,
@@ -49,4 +50,21 @@ it("reads what the script reports", () => {
     error: "No outline.",
   });
   assert.equal(parseAutorouteReport("Traceback"), undefined);
+});
+
+const boardOf = (net: string, extra = "") => `(kicad_pcb (version 20241229)
+  (footprint "R" (layer "F.Cu") (at 10 10) (property "Reference" "R1")
+    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net "${net}")))
+  ${extra})`;
+
+it("finishes a routed board with a ground pour and tidy references", () => {
+  assert.deepEqual(finishingEdits(boardOf("/GND")), [
+    { op: "pour", net: "/GND" },
+    { op: "tidy_labels" },
+  ]);
+  // No ground net, or a pour already there: only the references are tidied.
+  assert.deepEqual(finishingEdits(boardOf("+3V3")), [{ op: "tidy_labels" }]);
+  const poured = `(zone (net 1) (net_name "GND") (layer "F.Cu") (uuid "z")
+    (polygon (pts (xy 0 0) (xy 9 0) (xy 9 9))))`;
+  assert.deepEqual(finishingEdits(boardOf("GND", poured)), [{ op: "tidy_labels" }]);
 });

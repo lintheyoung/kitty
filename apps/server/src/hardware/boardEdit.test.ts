@@ -21,6 +21,7 @@ it("reads the board the script reports", () => {
     outline: null,
     parts: [part("R10"), part("R2")],
     overlaps: [["R2", "R10"]],
+    pours: [{ net: "GND", layer: "B.Cu", area: 120.5 }],
   };
   const parsed = parseBoardReport(`noise\nKITTY_BOARD ${JSON.stringify(report)}\n`);
   assert.deepEqual(parsed, {
@@ -28,6 +29,8 @@ it("reads the board the script reports", () => {
     parts: [part("R2"), part("R10")],
     overlaps: [["R2", "R10"]],
     keepouts: [],
+    pours: [{ net: "GND", layer: "B.Cu", area: 120.5 }],
+    texts: [],
   });
   assert.deepEqual(parseBoardReport('KITTY_BOARD {"error":"U9 is not on the board."}'), {
     error: "U9 is not on the board.",
@@ -80,4 +83,14 @@ it("lists what is left to route and describes the nets asked about", () => {
   assert.deepEqual(routed.nets[0]?.tracks, [
     { id: "t1", layer: "F.Cu", width: 0.2, from: { x: 10, y: 10 }, to: { x: 30, y: 10 } },
   ]);
+});
+
+it("counts pads on a filled pour as joined", () => {
+  const pour = `(zone (net 2) (net_name "GND") (layer "F.Cu") (uuid "z1")
+    (polygon (pts (xy 0 0) (xy 50 0) (xy 50 20) (xy 0 20)))
+    (filled_polygon (layer "F.Cu") (pts (xy 0 0) (xy 50 0) (xy 50 20) (xy 0 20))))`;
+  assert.deepEqual(
+    boardRouting(boardWith(pour)).toRoute.map((wire) => wire.net),
+    ["/SDA"],
+  );
 });

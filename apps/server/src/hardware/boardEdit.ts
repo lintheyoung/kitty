@@ -17,6 +17,8 @@ export interface BoardEditReport {
   /** Pairs of parts on the same side whose bodies overlap. */
   readonly overlaps: ReadonlyArray<readonly [string, string]>;
   readonly keepouts: ReadonlyArray<BoardKeepout>;
+  readonly pours: BoardEditResult["pours"];
+  readonly texts: BoardEditResult["texts"];
 }
 
 type BoardKeepout = BoardEditResult["keepouts"][number];
@@ -109,6 +111,8 @@ export function parseBoardReport(
       parts?: ReadonlyArray<BoardPart>;
       overlaps?: ReadonlyArray<readonly [string, string]>;
       keepouts?: ReadonlyArray<BoardKeepout>;
+      pours?: BoardEditResult["pours"];
+      texts?: BoardEditResult["texts"];
     };
     if (typeof report.error === "string") return { error: report.error };
     return {
@@ -117,6 +121,8 @@ export function parseBoardReport(
       parts: (report.parts ?? []).toSorted((a, b) => naturally(a.reference, b.reference)),
       overlaps: report.overlaps ?? [],
       keepouts: report.keepouts ?? [],
+      pours: report.pours ?? [],
+      texts: report.texts ?? [],
     };
   } catch {
     return undefined;
@@ -205,6 +211,83 @@ def net_for(name, spots, layer):
 def keepouts():
     return [zone for zone in board.Zones() if zone.GetIsRuleArea()]
 
+def pours():
+    return [zone for zone in board.Zones() if not zone.GetIsRuleArea()]
+
+def rectangle(outline, x, y, width, height):
+    outline.NewOutline()
+    for dx, dy in ((0, 0), (1, 0), (1, 1), (0, 1)):
+        outline.Append(int(x + dx * width), int(y + dy * height))
+
+def drop_pours(net, layers):
+    count = 0
+    for zone in pours():
+        if zone.GetNetCode() == net.GetNetCode() and any(zone.IsOnLayer(layer) for layer in layers):
+            board.Remove(zone)
+            removed.append(zone)
+            count += 1
+    return count
+
+def silk_texts():
+    return [item for item in board.GetDrawings()
+            if isinstance(item, pcbnew.PCB_TEXT) and item.GetLayer() in (pcbnew.F_SilkS, pcbnew.B_SilkS)]
+
+def centre_on(text, x, y):
+    """Texts are placed by their anchor; this puts the middle of the drawn text on the point."""
+    text.SetPosition(pcbnew.VECTOR2I(int(x), int(y)))
+    middle = text.GetBoundingBox().Centre()
+    text.SetPosition(pcbnew.VECTOR2I(int(2 * x - middle.x), int(2 * y - middle.y)))
+
+LABEL_SIZE = 0.8
+LABEL_STROKE = 0.15
+
+def overlap(a, b):
+    return a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]
+
+def tidy_labels():
+    """Each reference beside its part, where it covers no other part and no other reference."""
+    edges = board.GetBoardEdgesBoundingBox()
+    inside = None
+    if edges.GetWidth() > 0 and edges.GetHeight() > 0:
+        inside = (edges.GetLeft(), edges.GetTop(), edges.GetRight(), edges.GetBottom())
+    bodies = []
+    for fp in board.GetFootprints():
+        box = fp.GetBoundingBox(False)
+        bodies.append((fp, (box.GetLeft(), box.GetTop(), box.GetRight(), box.GetBottom())))
+    # Small parts choose first: they have the fewest places to put a reference.
+    bodies.sort(key=lambda entry: (entry[1][2] - entry[1][0]) * (entry[1][3] - entry[1][1]))
+    taken = {False: [], True: []}
+    gap = mm(0.3)
+    for fp, body in bodies:
+        back = fp.IsFlipped()
+        text = fp.Reference()
+        text.SetVisible(True)
+        text.SetLayer(pcbnew.B_SilkS if back else pcbnew.F_SilkS)
+        text.SetTextSize(pcbnew.VECTOR2I(mm(LABEL_SIZE), mm(LABEL_SIZE)))
+        text.SetTextThickness(mm(LABEL_STROKE))
+        text.SetTextAngleDegrees(0)
+        size = text.GetBoundingBox()
+        w, h = size.GetWidth(), size.GetHeight()
+        cx, cy = (body[0] + body[2]) / 2, (body[1] + body[3]) / 2
+        above, below = body[1] - gap - h / 2, body[3] + gap + h / 2
+        right, left = body[2] + gap + w / 2, body[0] - gap - w / 2
+        best = None
+        for x, y in ((cx, above), (cx, below), (right, cy), (left, cy),
+                     (right, above), (left, above), (right, below), (left, below)):
+            box = (x - w / 2, y - h / 2, x + w / 2, y + h / 2)
+            cost = sum(1 for other, other_body in bodies
+                       if other is not fp and other.IsFlipped() == back and overlap(box, other_body))
+            cost += sum(1 for other in taken[back] if overlap(box, other))
+            if inside and not (inside[0] <= box[0] and inside[1] <= box[1] and box[2] <= inside[2] and box[3] <= inside[3]):
+                cost += 3
+            if best is None or cost < best[0]:
+                best = (cost, x, y, box)
+            if cost == 0:
+                break
+        centre_on(text, best[1], best[2])
+        taken[back].append(best[3])
+    return len(bodies)
+
 def blocked(shape, layers, net, via=False):
     """What the shape would touch that it may not: a keep-out area or copper of another net."""
     gap = settings.m_NetSettings.GetEffectiveNetClass(net.GetNetname()).GetClearance()
@@ -227,6 +310,65 @@ def blocked(shape, layers, net, via=False):
                 return "a %s of %s at %s" % (
                     "via" if track.Type() == pcbnew.PCB_VIA_T else "track", track.GetNetname(), where(track.GetPosition()))
     return None
+
+def new_via(net, position):
+    rules = settings.m_NetSettings.GetEffectiveNetClass(net.GetNetname())
+    via = pcbnew.PCB_VIA(board)
+    via.SetViaType(pcbnew.VIATYPE_THROUGH)
+    via.SetLayerPair(pcbnew.F_Cu, pcbnew.B_Cu)
+    via.SetPosition(position)
+    via.SetWidth(pcbnew.F_Cu, rules.GetViaDiameter())
+    via.SetDrill(rules.GetViaDrill())
+    via.SetNet(net)
+    return via
+
+STITCH_STEP = 8
+STITCH_LIMIT = 40
+
+def stitch(net):
+    """Joins a net's pours on different layers with vias on a coarse grid, where every layer has fill."""
+    fills = [zone.GetFilledPolysList(layer) for zone in pours() for layer in copper_layers
+             if zone.GetNetCode() == net.GetNetCode() and zone.IsOnLayer(layer) and zone.IsFilled()]
+    if len(fills) < 2:
+        return 0
+    rules = settings.m_NetSettings.GetEffectiveNetClass(net.GetNetname())
+    reach = rules.GetViaDiameter() // 2 + rules.GetClearance()
+    area = fills[0].BBox()
+    for fill in fills[1:]:
+        area.Merge(fill.BBox())
+    bodies = []
+    for fp in board.GetFootprints():
+        body = fp.GetBoundingBox(False)
+        body.Inflate(reach)
+        bodies.append(body)
+    step = mm(STITCH_STEP)
+    there = [track.GetPosition() for track in board.GetTracks()
+             if track.Type() == pcbnew.PCB_VIA_T and track.GetNetCode() == net.GetNetCode()]
+    count = 0
+    y = area.GetTop() + step // 2
+    while y < area.GetBottom() and count < STITCH_LIMIT:
+        x = area.GetLeft() + step // 2
+        while x < area.GetRight() and count < STITCH_LIMIT:
+            spot = pcbnew.VECTOR2I(x, y)
+            x += step
+            if any(abs(other.x - spot.x) < step // 2 and abs(other.y - spot.y) < step // 2 for other in there):
+                continue
+            if any(body.Contains(spot) for body in bodies):
+                continue
+            ring = [spot] + [pcbnew.VECTOR2I(spot.x + dx * reach, spot.y + dy * reach)
+                             for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1))]
+            if not all(fill.Contains(point) for fill in fills for point in ring):
+                continue
+            via = new_via(net, spot)
+            if blocked(via.GetEffectiveShape(pcbnew.F_Cu), copper_layers, net, True):
+                continue
+            board.Add(via)
+            there.append(spot)
+            count += 1
+        y += step
+    return count
+
+stitching = []
 
 for edit in job["edits"]:
     op = edit["op"]
@@ -287,9 +429,7 @@ for edit in job["edits"]:
         zone.SetDoNotAllowPads(False)
         zone.SetDoNotAllowFootprints(False)
         outline = zone.Outline()
-        outline.NewOutline()
-        for x, y in ((0, 0), (1, 0), (1, 1), (0, 1)):
-            outline.Append(mm(edit["x"] + x * edit["width"]), mm(edit["y"] + y * edit["height"]))
+        rectangle(outline, mm(edit["x"]), mm(edit["y"]), mm(edit["width"]), mm(edit["height"]))
         for fp in board.GetFootprints():
             for pad in fp.Pads():
                 if pad.GetNetCode() > 0 and any(
@@ -307,6 +447,83 @@ for edit in job["edits"]:
             board.Remove(zone)
             removed.append(zone)
         summary.append("Removed the keep-out area %s" % edit["name"])
+    elif op == "pour":
+        net = find_net(edit["net"])
+        if net is None:
+            fail("The board has no net called %s." % edit["net"])
+        layers = [copper_layer(name) for name in edit["layers"]] if edit.get("layers") else copper_layers
+        if all(key in edit for key in ("x", "y", "width", "height")):
+            if edit["width"] <= 0 or edit["height"] <= 0:
+                fail("A pour needs a width and height above zero.")
+            area = (mm(edit["x"]), mm(edit["y"]), mm(edit["width"]), mm(edit["height"]))
+        else:
+            edges = board.GetBoardEdgesBoundingBox()
+            if edges.GetWidth() <= 0 or edges.GetHeight() <= 0:
+                fail("The board has no outline yet. Set the outline first, or give the pour a rectangle.")
+            area = (edges.GetLeft(), edges.GetTop(), edges.GetWidth(), edges.GetHeight())
+        drop_pours(net, layers)
+        for layer in layers:
+            zone = pcbnew.ZONE(board)
+            zone.SetNet(net)
+            zone.SetLayer(layer)
+            zone.SetZoneName("%s pour" % net.GetNetname())
+            zone.SetPadConnection(pcbnew.ZONE_CONNECTION_THERMAL)
+            zone.SetIslandRemovalMode(pcbnew.ISLAND_REMOVAL_MODE_ALWAYS)
+            rectangle(zone.Outline(), *area)
+            board.Add(zone)
+        summary.append("Poured %s on %s" % (
+            net.GetNetname(), ", ".join(board.GetLayerName(layer) for layer in layers)))
+        if net.GetNetCode() not in [other.GetNetCode() for other in stitching]:
+            stitching.append(net)
+    elif op == "remove_pour":
+        net = find_net(edit["net"])
+        if net is None:
+            fail("The board has no net called %s." % edit["net"])
+        layers = [copper_layer(name) for name in edit["layers"]] if edit.get("layers") else copper_layers
+        if drop_pours(net, layers) == 0:
+            fail("The board has no %s pour there." % net.GetNetname())
+        summary.append("Removed the %s pour" % net.GetNetname())
+    elif op == "text":
+        words = edit["text"].strip()
+        size = edit.get("size", 1)
+        if not words:
+            fail("A silkscreen text needs some text.")
+        if size < 0.8:
+            fail("Silkscreen text under 0.8 mm does not print clearly. Make it at least 0.8 mm.")
+        back = edit.get("side") == "back"
+        text = pcbnew.PCB_TEXT(board)
+        text.SetText(words)
+        text.SetLayer(pcbnew.B_SilkS if back else pcbnew.F_SilkS)
+        text.SetTextSize(pcbnew.VECTOR2I(mm(size), mm(size)))
+        text.SetTextThickness(mm(max(0.15, size * 0.15)))
+        text.SetMirrored(back)
+        text.SetTextAngleDegrees(edit.get("rotation", 0))
+        centre_on(text, mm(edit["x"]), mm(edit["y"]))
+        board.Add(text)
+        summary.append("Printed '%s' on the %s silkscreen at (%s, %s)" % (
+            words, "back" if back else "front", number(edit["x"]), number(edit["y"])))
+    elif op == "remove_text":
+        found = [text for text in silk_texts() if text.m_Uuid.AsString() == edit["id"]]
+        if not found:
+            fail("The silkscreen has no text with the id %s." % edit["id"])
+        board.Remove(found[0])
+        removed.append(found[0])
+        summary.append("Removed the silkscreen text '%s'" % found[0].GetText())
+    elif op == "label":
+        fp = footprints.get(edit["reference"])
+        if fp is None:
+            fail("%s is not on the board." % edit["reference"])
+        text = fp.Reference()
+        if "hidden" in edit:
+            text.SetVisible(not edit["hidden"])
+        if "rotation" in edit:
+            text.SetTextAngleDegrees(edit["rotation"])
+        if "at" in edit:
+            centre_on(text, mm(edit["at"]["x"]), mm(edit["at"]["y"]))
+        summary.append("%s the reference of %s" % (
+            "Hid" if edit.get("hidden") else "Moved" if "at" in edit else "Changed", edit["reference"]))
+    elif op == "tidy_labels":
+        summary.append("Tidied the references of %d parts on the silkscreen" % tidy_labels())
     elif op == "track":
         layer = copper_layer(edit.get("layer", "F.Cu"))
         spots = [spot_of(point) for point in edit["points"]]
@@ -354,14 +571,7 @@ for edit in job["edits"]:
         net = net_for(edit.get("net"), [spot], None)
         if net is None:
             fail("Say which net this via belongs to, or put it at the end of a track.")
-        rules = settings.m_NetSettings.GetEffectiveNetClass(net.GetNetname())
-        via = pcbnew.PCB_VIA(board)
-        via.SetViaType(pcbnew.VIATYPE_THROUGH)
-        via.SetLayerPair(pcbnew.F_Cu, pcbnew.B_Cu)
-        via.SetPosition(spot[0])
-        via.SetWidth(pcbnew.F_Cu, rules.GetViaDiameter())
-        via.SetDrill(rules.GetViaDrill())
-        via.SetNet(net)
+        via = new_via(net, spot[0])
         hit = blocked(via.GetEffectiveShape(pcbnew.F_Cu), copper_layers, net, True)
         if hit:
             fail("A via at %s would touch %s." % (where(spot[0]), hit))
@@ -398,6 +608,15 @@ for edit in job["edits"]:
         fail("Unknown board edit: %s" % op)
 
 if job["edits"]:
+    # Pours follow the copper around them, so every change fills them again.
+    if pours():
+        pcbnew.ZONE_FILLER(board).Fill(board.Zones())
+        # A new pour on several layers is one piece of copper only once vias join the layers.
+        for net in stitching:
+            count = stitch(net)
+            if count:
+                summary.append("Joined the %s pours with %d vias" % (net.GetNetname(), count))
+                pcbnew.ZONE_FILLER(board).Fill(board.Zones())
     pcbnew.SaveBoard(job["board"], board)
 
 edges = board.GetBoardEdgesBoundingBox()
@@ -434,6 +653,21 @@ for zone in keepouts():
     areas.append({"name": zone.GetZoneName(), "x": to_mm(box.GetLeft()), "y": to_mm(box.GetTop()),
                   "width": to_mm(box.GetWidth()), "height": to_mm(box.GetHeight())})
 
+fills = []
+for zone in pours():
+    for layer in copper_layers:
+        if zone.IsOnLayer(layer):
+            fills.append({"net": zone.GetNetname(), "layer": board.GetLayerName(layer),
+                          "area": round(zone.GetFilledPolysList(layer).Area() / 1e12, 1) if zone.IsFilled() else 0})
+
+texts = []
+for text in silk_texts():
+    middle = text.GetBoundingBox().Centre()
+    texts.append({"id": text.m_Uuid.AsString(), "text": text.GetText(),
+                  "at": {"x": to_mm(middle.x), "y": to_mm(middle.y)},
+                  "side": "back" if text.GetLayer() == pcbnew.B_SilkS else "front"})
+
 print("KITTY_BOARD " + json.dumps({
-    "summary": summary, "outline": outline, "parts": parts, "overlaps": overlaps[:40], "keepouts": areas}))
+    "summary": summary, "outline": outline, "parts": parts, "overlaps": overlaps[:40], "keepouts": areas,
+    "pours": fills, "texts": texts}))
 `;

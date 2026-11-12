@@ -67,6 +67,7 @@ import {
   autorouteJob,
   FREEROUTING_FOLDERS,
   FREEROUTING_MISSING,
+  finishingEdits,
   freeroutingArgs,
   javaCandidates,
   parseAutorouteReport,
@@ -551,6 +552,8 @@ atexit.register(_kitty_leave)
       parts: [...report.parts],
       overlaps: report.overlaps.map(([a, b]) => [a, b] as const),
       keepouts: [...report.keepouts],
+      pours: [...report.pours],
+      texts: [...report.texts],
       toRoute: [...routing.toRoute],
       unrouted: routing.unrouted,
       ...(input.nets ? { nets: [...routing.nets] } : {}),
@@ -637,9 +640,21 @@ atexit.register(_kitty_leave)
         return yield* step("import");
       }),
     );
-    const after = yield* fs
+    const readBoard = fs
       .readFileString(file)
       .pipe(Effect.mapError((cause) => failure("command_failed", cause.message)));
+    // Finishing is a bonus: when it fails, the routed board stands as it is.
+    const routed = yield* readBoard;
+    const finishing =
+      input.finish === false ? [] : yield* parseOrFail(() => finishingEdits(routed), "board");
+    const finished =
+      finishing.length === 0
+        ? undefined
+        : yield* runKicadPython(BOARD_EDIT_SCRIPT, boardEditJob(file, finishing), directory).pipe(
+            Effect.map(parseBoardReport),
+            Effect.orElseSucceed(() => undefined),
+          );
+    const after = yield* readBoard;
     const routing = yield* parseOrFail(() => boardRouting(after), "board");
     const left =
       routing.unrouted === 0
@@ -647,6 +662,7 @@ atexit.register(_kitty_leave)
         : `${routing.unrouted} connection${routing.unrouted === 1 ? "" : "s"} left`;
     const summary = [
       `Auto-routed the board: ${report.tracks} tracks, ${report.vias} vias, ${left}`,
+      ...(finished && !("error" in finished) ? finished.summary : []),
     ];
     const history = historyOf(file, before);
     history.undo.push({ source: before, summary });
