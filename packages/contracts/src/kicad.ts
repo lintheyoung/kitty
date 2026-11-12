@@ -244,7 +244,12 @@ export const BoardEdit = Schema.Union([
     y: Schema.Number,
     width: Schema.Number,
     height: Schema.Number,
-  }).annotate({ description: "Make the board a rectangle; replaces the outline it has." }),
+    radius: Schema.optional(
+      Schema.Number.annotate({ description: "Corner radius in millimetres; square when absent." }),
+    ),
+  }).annotate({
+    description: "Make the board a rectangle, with rounded corners if asked; replaces its outline.",
+  }),
   Schema.Struct({
     op: Schema.Literal("keepout"),
     name: Schema.String.annotate({

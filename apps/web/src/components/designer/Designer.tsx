@@ -421,11 +421,26 @@ const inside = (box: Box, outline: Box) =>
   box.maxX <= outline.maxX &&
   box.maxY <= outline.maxY;
 
+/** The radius of the outline's rounded corners, read off its first quarter circle. */
+function cornerRadius(scene: Scene): number {
+  for (const item of scene.items) {
+    if (item.layer !== "Edge.Cuts") continue;
+    for (const shape of item.shapes) {
+      if (shape.kind !== "arc") continue;
+      const chord = Math.hypot(shape.end.x - shape.start.x, shape.end.y - shape.start.y);
+      return Math.round((chord / Math.SQRT2) * 10) / 10;
+    }
+  }
+  return 0;
+}
+
 /** Sets the board to a rectangle of a given size. */
 function BoardSize(props: {
   readonly outline: Box | undefined;
   readonly busy: boolean;
-  readonly onSet: (width: number, height: number) => void;
+  /** The corner radius the outline has now; 0 for square corners. */
+  readonly radius: number;
+  readonly onSet: (width: number, height: number, radius: number) => void;
 }) {
   const { outline } = props;
   const size = (value: number | undefined) =>
@@ -438,7 +453,8 @@ function BoardSize(props: {
         const data = new FormData(event.currentTarget);
         const width = Number(data.get("width"));
         const height = Number(data.get("height"));
-        if (width > 0 && height > 0) props.onSet(width, height);
+        const radius = Math.max(0, Number(data.get("radius")) || 0);
+        if (width > 0 && height > 0) props.onSet(width, height, radius);
       }}
     >
       <div className="font-medium">Board size in mm</div>
@@ -463,6 +479,19 @@ function BoardSize(props: {
           aria-label="Height"
           placeholder="Height"
           defaultValue={size(outline ? outline.maxY - outline.minY : undefined)}
+        />
+      </div>
+      <div className="flex items-center gap-1.5">
+        <span className="shrink-0 text-muted-foreground">Corner radius</span>
+        <Input
+          size="compact"
+          name="radius"
+          type="number"
+          min={0}
+          step="any"
+          aria-label="Corner radius"
+          placeholder="0"
+          defaultValue={props.radius > 0 ? String(props.radius) : ""}
         />
         <Button type="submit" size="xs" disabled={props.busy}>
           Set
@@ -1238,12 +1267,15 @@ function DesignerView(props: {
             {showSize && boardEditable ? (
               <BoardSize
                 outline={outline}
+                radius={cornerRadius(scene)}
                 busy={editor.busy}
-                onSet={(width, height) => {
+                onSet={(width, height, radius) => {
                   // A board with no outline yet gets one around where its parts start.
                   const x = outline?.minX ?? 100;
                   const y = outline?.minY ?? 80;
-                  void editor.applyBoard([{ op: "outline", x, y, width, height }]);
+                  void editor.applyBoard([
+                    { op: "outline", x, y, width, height, ...(radius > 0 ? { radius } : {}) },
+                  ]);
                   setShowSize(false);
                 }}
               />

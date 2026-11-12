@@ -64,7 +64,15 @@ import * as SchemaIssue from "effect/SchemaIssue";
 import * as ProcessRunner from "../processRunner.ts";
 import { buildBoardScene } from "@t3tools/shared/kicad/boardScene";
 import { finishingEdits } from "@t3tools/shared/kicad/boardFinish";
-import { modelPath, seatModel, wrlExtent } from "./modelPlacement.ts";
+import {
+  boardModelPaths,
+  modelPath,
+  type ModelShapes,
+  seatBoardModels,
+  seatModel,
+  stepExtent,
+  wrlExtent,
+} from "./modelPlacement.ts";
 import {
   AUTOROUTE_SCRIPT,
   autorouteJob,
@@ -1451,6 +1459,8 @@ atexit.register(_kitty_leave)
   ) {
     const { file, relative } = yield* resolveDesign(input.workspaceRoot, input.path, ".kicad_pcb");
     const cli = yield* findCli();
+    yield* seatLibraryModels(path.dirname(file));
+    yield* seatBoard(file);
     return yield* Effect.scoped(
       Effect.gen(function* () {
         const temp = yield* fs
@@ -1506,6 +1516,21 @@ atexit.register(_kitty_leave)
     return { stamp: parts.join("|") } satisfies KicadDesignStampResult;
   });
 
+  /** A model's mesh and solid, measured from the two files the converter writes for it. */
+  const modelShapes = Effect.fn("KicadService.modelShapes")(function* (
+    model: string,
+    designDirectory: string,
+  ) {
+    const base = model.replace("${KIPRJMOD}", designDirectory).replace(/\.[^./]+$/, "");
+    const read = (file: string) => fs.readFileString(file).pipe(Effect.option);
+    const wrl = yield* read(`${base}.wrl`);
+    const step = yield* read(`${base}.step`);
+    return {
+      wrl: Option.isSome(wrl) ? wrlExtent(wrl.value) : undefined,
+      step: Option.isSome(step) ? stepExtent(step.value) : undefined,
+    } satisfies ModelShapes;
+  });
+
   const seatLibraryModels = Effect.fn("KicadService.seatLibraryModels")(function* (
     designDirectory: string,
   ) {
@@ -1517,13 +1542,22 @@ atexit.register(_kitty_leave)
       const source = yield* fs.readFileString(file).pipe(Effect.option);
       const model = Option.isSome(source) ? modelPath(source.value) : undefined;
       if (Option.isNone(source) || !model) continue;
-      // The mesh is measured from the VRML copy the converter writes beside each model.
-      const mesh = model.replace("${KIPRJMOD}", designDirectory).replace(/\.[^./]+$/, ".wrl");
-      const shape = yield* fs.readFileString(mesh).pipe(Effect.option);
-      if (Option.isNone(shape)) continue;
-      const seated = seatModel(source.value, wrlExtent(shape.value));
+      const seated = seatModel(source.value, yield* modelShapes(model, designDirectory));
       if (seated !== source.value) yield* fs.writeFileString(file, seated).pipe(Effect.ignore);
     }
+  });
+
+  /** Seats the models of the parts already on a board, so its 3D view shows them where they sit. */
+  const seatBoard = Effect.fn("KicadService.seatBoard")(function* (file: string) {
+    const directory = path.dirname(file);
+    const board = yield* fs.readFileString(file).pipe(Effect.option);
+    if (Option.isNone(board)) return;
+    const shapes = new Map<string, ModelShapes>();
+    for (const model of boardModelPaths(board.value)) {
+      shapes.set(model, yield* modelShapes(model, directory));
+    }
+    const seated = seatBoardModels(board.value, (model) => shapes.get(model) ?? {});
+    if (seated !== board.value) yield* fs.writeFileString(file, seated).pipe(Effect.ignore);
   });
 
   const upgradeLibraries = Effect.fn("KicadService.upgradeLibraries")(function* (input: {

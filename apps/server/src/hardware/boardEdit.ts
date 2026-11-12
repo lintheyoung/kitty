@@ -408,14 +408,36 @@ for edit in job["edits"]:
                 board.Remove(drawing)
                 # Kept until the end like removed tracks: freeing it mid-run breaks KiCad's Python types.
                 removed.append(drawing)
-        shape = pcbnew.PCB_SHAPE(board, pcbnew.SHAPE_T_RECT)
-        shape.SetStart(pcbnew.VECTOR2I(mm(edit["x"]), mm(edit["y"])))
-        shape.SetEnd(pcbnew.VECTOR2I(mm(edit["x"] + edit["width"]), mm(edit["y"] + edit["height"])))
-        shape.SetLayer(pcbnew.Edge_Cuts)
-        shape.SetWidth(mm(0.1))
-        board.Add(shape)
-        summary.append("Set the board outline to %s x %s mm at (%s, %s)" % (
-            number(edit["width"]), number(edit["height"]), number(edit["x"]), number(edit["y"])))
+        left, top = edit["x"], edit["y"]
+        right, bottom = left + edit["width"], top + edit["height"]
+        radius = max(0, min(edit.get("radius", 0), edit["width"] / 2, edit["height"] / 2))
+        def edge(kind, *points):
+            shape = pcbnew.PCB_SHAPE(board, kind)
+            corners = [pcbnew.VECTOR2I(mm(x), mm(y)) for x, y in points]
+            if kind == pcbnew.SHAPE_T_ARC:
+                shape.SetArcGeometry(*corners)
+            else:
+                shape.SetStart(corners[0])
+                shape.SetEnd(corners[1])
+            shape.SetLayer(pcbnew.Edge_Cuts)
+            shape.SetWidth(mm(0.1))
+            board.Add(shape)
+        if radius <= 0:
+            edge(pcbnew.SHAPE_T_RECT, (left, top), (right, bottom))
+        else:
+            # Four straight sides joined by quarter circles, which every tool downstream reads.
+            r, bend = radius, radius * (1 - 0.5 ** 0.5)
+            edge(pcbnew.SHAPE_T_SEGMENT, (left + r, top), (right - r, top))
+            edge(pcbnew.SHAPE_T_SEGMENT, (right, top + r), (right, bottom - r))
+            edge(pcbnew.SHAPE_T_SEGMENT, (right - r, bottom), (left + r, bottom))
+            edge(pcbnew.SHAPE_T_SEGMENT, (left, bottom - r), (left, top + r))
+            edge(pcbnew.SHAPE_T_ARC, (left, top + r), (left + bend, top + bend), (left + r, top))
+            edge(pcbnew.SHAPE_T_ARC, (right - r, top), (right - bend, top + bend), (right, top + r))
+            edge(pcbnew.SHAPE_T_ARC, (right, bottom - r), (right - bend, bottom - bend), (right - r, bottom))
+            edge(pcbnew.SHAPE_T_ARC, (left + r, bottom), (left + bend, bottom - bend), (left, bottom - r))
+        summary.append("Set the board outline to %s x %s mm at (%s, %s)%s" % (
+            number(edit["width"]), number(edit["height"]), number(edit["x"]), number(edit["y"]),
+            " with %s mm corners" % number(radius) if radius > 0 else ""))
     elif op == "keepout":
         if edit["width"] <= 0 or edit["height"] <= 0 or not edit["name"].strip():
             fail("A keep-out area needs a name and a width and height above zero.")
