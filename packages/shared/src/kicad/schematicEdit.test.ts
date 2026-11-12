@@ -334,6 +334,49 @@ describe("schematic edits", () => {
     expect(twice.placed).toEqual(tidied.placed);
   });
 
+  it("fills the sheet in rows when columns would not fit, clear of the title block", () => {
+    const names = ["USB", "Power", "MCU", "Buttons", "LED", "Sensor", "Fan"];
+    const drawn = applySchematicEdits(
+      BLANK,
+      names.flatMap((group, block) =>
+        Array.from({ length: 4 }, (_, index) => ({
+          op: "place" as const,
+          symbol: "jlc:R",
+          group,
+          nets: { "1": `IN${block}_${index}`, "2": `OUT${block}_${index}` },
+        })),
+      ),
+      context(),
+    );
+    const tidied = applySchematicEdits(drawn.source, [{ op: "tidy" }], context());
+    expect(netsOf(tidied.source)).toEqual(netsOf(drawn.source));
+    const [, paper] = /\(paper "(A\d)"\)/.exec(tidied.source) ?? [];
+    const [width, height] = paper === "A4" ? [297, 210] : [420, 297];
+    const frames = [
+      ...tidied.source.matchAll(
+        /\(rectangle\s*\(start (\S+) (\S+)\)\s*\(end (\S+) (\S+)\)\s*\(stroke\s*\(width 0\.1524\)/g,
+      ),
+    ].map((match) => match.slice(1).map(Number));
+    expect(frames.length).toBe(names.length);
+    expect(["A4", "A3"]).toContain(paper);
+    for (const [left = 0, top = 0, right = 0, bottom = 0] of frames) {
+      expect(left).toBeGreaterThanOrEqual(15.24);
+      expect(top).toBeGreaterThanOrEqual(15.24);
+      expect(right).toBeLessThanOrEqual(width - 15.24);
+      expect(bottom).toBeLessThanOrEqual(height - 15.24);
+      // The corner with the title block stays free.
+      expect(right > width - 15.24 - 113.03 && bottom > height - 15.24 - 38.1).toBe(false);
+    }
+    // No frame lies over another.
+    for (const [index, a] of frames.entries()) {
+      for (const b of frames.slice(index + 1)) {
+        const [al = 0, at = 0, ar = 0, ab = 0] = a;
+        const [bl = 0, bt = 0, br = 0, bb = 0] = b;
+        expect(al < br && bl < ar && at < bb && bt < ab).toBe(false);
+      }
+    }
+  });
+
   it("moves a part with its connections and removes them with the part", () => {
     const placed = applySchematicEdits(
       BLANK,

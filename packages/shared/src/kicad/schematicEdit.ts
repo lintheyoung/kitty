@@ -509,7 +509,7 @@ function footprintBox(
     const net = nets[pin.number];
     if (!net) continue;
     // Room for the wire and the label or power symbol at its end.
-    const reach = STUB + Math.max(net.length * TEXT * 0.9, STUB);
+    const reach = STUB + Math.max(net.length * TEXT * 0.9, 3.81);
     grow({ x: pin.at.x + pin.out.x * reach, y: pin.at.y + pin.out.y * reach });
     const across = { x: Math.abs(pin.out.y) * STUB, y: Math.abs(pin.out.x) * STUB };
     grow({
@@ -962,9 +962,10 @@ const PAPERS: ReadonlyArray<readonly [string, number, number]> = [
 ];
 /** Room kept clear inside the sheet's border, and above the title block at its foot. */
 const SHEET_EDGE = 15.24;
-const TITLE_BLOCK = 40.64;
+const TITLE_BLOCK = 38.1;
+const TITLE_WIDTH = 113.03;
 const FRAME_MARGIN = 5.08;
-const FRAME_GAP = 7.62;
+const FRAME_GAP = 5.08;
 const FRAME_STROKE = "0.1524";
 const OTHER_BLOCK = "Other";
 const naturally = new Intl.Collator("en", { numeric: true }).compare;
@@ -1454,10 +1455,11 @@ function tidy(session: Session, placed: Array<PlacedPart>): ReadonlyArray<string
   for (const [, members] of kept) {
     for (const { part } of members) top = Math.max(top, symbolBox(session, part).maxY + GROUP_GAP);
   }
+  type Frame = { block: (typeof order)[number]; x: number; y: number };
   // Columns from left to right, a new one for each stage and whenever one is full.
-  const columnsOn = (sheetHeight: number) => {
+  const inColumns = (sheetHeight: number) => {
     const bottom = sheetHeight - SHEET_EDGE - TITLE_BLOCK;
-    const frames: Array<{ block: (typeof order)[number]; x: number; y: number }> = [];
+    const frames: Array<Frame> = [];
     let x = SHEET_EDGE;
     let y = top;
     let wide = 0;
@@ -1474,21 +1476,76 @@ function tidy(session: Session, placed: Array<PlacedPart>): ReadonlyArray<string
       y += block.height + FRAME_GAP;
       before = block;
     }
+    return frames;
+  };
+  // Rows instead, each read from power in to what is driven.
+  const inRows = (rowOf: ReadonlyArray<number>) => {
+    const frames: Array<Frame> = [];
+    let y = top;
+    for (const row of [...new Set(rowOf)].sort((a, b) => a - b)) {
+      let x = SHEET_EDGE;
+      let tall = 0;
+      for (const block of order.filter((_, index) => rowOf[index] === row)) {
+        frames.push({ block, x: snap(x), y: snap(y) });
+        x += block.width + FRAME_GAP;
+        tall = Math.max(tall, block.height);
+      }
+      y += tall + FRAME_GAP;
+    }
     return {
       frames,
-      right: x + wide,
-      bottom: Math.max(...frames.map(({ block, y: at }) => at + block.height)),
+      area:
+        Math.max(...frames.map(({ block, x }) => x + block.width)) *
+        Math.max(...frames.map(({ block, y: at }) => at + block.height)),
+      first: rowOf[0] ?? 0,
     };
   };
-  const fitting = PAPERS.map(([paper, sheetWidth, sheetHeight]) => ({
-    paper,
-    ...columnsOn(sheetHeight),
-    fits: (layout: { right: number; bottom: number }) =>
-      layout.right <= sheetWidth - SHEET_EDGE &&
-      layout.bottom <= sheetHeight - SHEET_EDGE - TITLE_BLOCK,
-  }));
-  const chosen = fitting.find((layout) => layout.fits(layout)) ?? fitting.at(-1);
-  if (!chosen) throw refuse("The sheet could not be laid out.");
+  // Every way to deal the blocks into rows, with as many rows as can be tried in good time.
+  const most = [6, 5, 4, 3, 2].find((rows) => rows ** order.length <= 60000) ?? 1;
+  const deals: Array<ReadonlyArray<number>> = [[]];
+  for (let dealt = 0; dealt < order.length && most > 1; dealt++) {
+    const longer = deals.flatMap((deal) =>
+      Array.from({ length: most }, (_, row) => [...deal, row]),
+    );
+    deals.splice(0, deals.length, ...longer);
+  }
+  // The most compact rows first; of equals, the ones with power in on the top row.
+  const rowed = (most > 1 ? deals : [])
+    .map(inRows)
+    .sort((a, b) => a.area - b.area || a.first - b.first);
+  // With too many blocks to try them all: each row filled as far as the sheet is wide.
+  const filled = (sheetWidth: number) => {
+    let row = 0;
+    let x = SHEET_EDGE;
+    return inRows(
+      order.map((block) => {
+        if (x > SHEET_EDGE && x + block.width > sheetWidth - SHEET_EDGE) {
+          row++;
+          x = SHEET_EDGE;
+        }
+        x += block.width + FRAME_GAP;
+        return row;
+      }),
+    );
+  };
+  // A sheet holds a layout that stays inside its border and off the title block in its corner.
+  const holds = (frames: ReadonlyArray<Frame>, sheetWidth: number, sheetHeight: number) =>
+    frames.every(({ block, x, y }) => {
+      const right = x + block.width;
+      const bottom = y + block.height;
+      const onTitle =
+        right > sheetWidth - SHEET_EDGE - TITLE_WIDTH &&
+        bottom > sheetHeight - SHEET_EDGE - TITLE_BLOCK;
+      return right <= sheetWidth - SHEET_EDGE && bottom <= sheetHeight - SHEET_EDGE && !onTitle;
+    });
+  const chosen = PAPERS.flatMap(([paper, sheetWidth, sheetHeight]) => {
+    const frames = [
+      inColumns(sheetHeight),
+      ...rowed.map((layout) => layout.frames),
+      filled(sheetWidth).frames,
+    ].find((layout) => holds(layout, sheetWidth, sheetHeight));
+    return frames ? [{ paper, frames }] : [];
+  })[0] ?? { paper: PAPERS.at(-1)?.[0] ?? "A1", frames: inColumns(PAPERS.at(-1)?.[2] ?? 594) };
   const paper = find(session.root, "paper");
   if (paper) paper[1] = quoted(chosen.paper);
 
