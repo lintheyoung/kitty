@@ -1,7 +1,9 @@
 import { assert, it } from "vite-plus/test";
 
 import {
+  boardModelFits,
   boardModelPaths,
+  modelFit,
   modelPath,
   seatBoardModels,
   seatModel,
@@ -83,5 +85,50 @@ it("seats the models of the parts already on a board", () => {
   assert.equal(
     seatBoardModels(before, () => ({})),
     before,
+  );
+});
+
+it("says whether a model sits on its footprint", () => {
+  const module = { minX: -9, maxX: 9, minY: -9.05, maxY: 16.45, minZ: 0 };
+  const solid = { minX: -9, maxX: 9, minY: -12.75, maxY: 12.75, minZ: -0.4 };
+  const shapes = { wrl: module, step: solid };
+  // The converter's mesh is where it should be; its solid, shown unmoved, is not.
+  const meshed = footprint(0, "0 0", -16.45, 9.05);
+  assert.deepEqual(modelFit(meshed, shapes), { status: "fits" });
+  const unmoved = meshed.replace("USB-C.wrl", "USB-C.step");
+  assert.deepEqual(modelFit(unmoved, shapes), {
+    status: "off",
+    note: "Its 3D model sits 3.7 mm off its footprint.",
+  });
+  // Moved onto the footprint but left sunk, then seated properly.
+  assert.deepEqual(modelFit(unmoved.replace("(xyz 0 0 0)", "(xyz 0 3.7 0)"), shapes), {
+    status: "off",
+    note: "Its 3D model sits 0.4 mm into the board.",
+  });
+  assert.deepEqual(modelFit(seatModel(meshed, shapes), shapes), { status: "fits" });
+  // Turned sideways, the two files are still compared with each other.
+  const sideways = footprint(90, "0 0", -16.45, 9.05).replace("USB-C.wrl", "USB-C.step");
+  assert.equal(modelFit(sideways, shapes).status, "off");
+  assert.equal(modelFit(sideways, { wrl: solid, step: solid }).status, "fits");
+});
+
+it("does not pass what it cannot measure", () => {
+  assert.deepEqual(modelFit("(footprint)", { wrl: mesh }), {
+    status: "unchecked",
+    note: "It has no 3D model.",
+  });
+  assert.equal(modelFit(footprint(0, "0 0"), {}).status, "unchecked");
+  const part = (reference: string, layer: string) =>
+    footprint(180, "0 -2.5").replace(
+      '(footprint "USB-C"',
+      `(footprint "USB-C" (layer "${layer}") (property "Reference" "${reference}")`,
+    );
+  const board = `(kicad_pcb ${part("J1", "F.Cu")} ${part("J2", "B.Cu")})`;
+  assert.deepEqual(
+    boardModelFits(board, () => ({ wrl: mesh })),
+    [
+      { reference: "J1", fit: { status: "fits" } },
+      { reference: "J2", fit: { status: "unchecked", note: "It is on the back of the board." } },
+    ],
   );
 });

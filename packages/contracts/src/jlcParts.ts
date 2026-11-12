@@ -52,6 +52,17 @@ export const JlcPartPin = Schema.Struct({ number: Schema.String, name: Schema.St
 export type JlcPartPin = typeof JlcPartPin.Type;
 
 /** A JLC part whose symbol, footprint and 3D model are now in the design's library. */
+/**
+ * Whether a part's 3D model sits on its footprint. Position only: a model
+ * turned the wrong way round on a symmetric body, or pin 1, is not seen.
+ */
+export const ModelFit = Schema.Struct({
+  status: Schema.Literals(["fits", "off", "unchecked"]),
+  /** What is wrong, or why it could not be checked. */
+  note: Schema.optional(Schema.String),
+});
+export type ModelFit = typeof ModelFit.Type;
+
 export const JlcImportedPart = Schema.Struct({
   lcsc: Schema.String,
   /** Library id to place in a schematic, e.g. `jlc:AMS1117-3.3`. */
@@ -65,6 +76,8 @@ export const JlcImportedPart = Schema.Struct({
   pins: Schema.Array(JlcPartPin),
   /** The symbol library file, relative to the workspace. */
   library: Schema.String,
+  /** Whether the 3D model sits on the footprint. */
+  model: ModelFit,
 });
 export type JlcImportedPart = typeof JlcImportedPart.Type;
 

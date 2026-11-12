@@ -16,6 +16,7 @@ import {
   type KicadFabExportResult,
   type KicadNetlistInput,
   type KicadNetlistResult,
+  type ModelFit,
   type KicadBoardModelResult,
   type KicadDesignFile,
   type KicadDesignSourceResult,
@@ -65,7 +66,9 @@ import * as ProcessRunner from "../processRunner.ts";
 import { buildBoardScene } from "@t3tools/shared/kicad/boardScene";
 import { finishingEdits } from "@t3tools/shared/kicad/boardFinish";
 import {
+  boardModelFits,
   boardModelPaths,
+  modelFit,
   modelPath,
   type ModelShapes,
   seatBoardModels,
@@ -171,6 +174,8 @@ export class KicadService extends Context.Service<
     /** Rewrites a symbol library file and a footprint library folder in KiCad's current format. */
     /** Slides the 3D models of the design's JLC footprints onto their bodies; never fails. */
     readonly seatLibraryModels: (designDirectory: string) => Effect.Effect<void>;
+    /** Whether the 3D model of one of the design's JLC footprints sits on it; never fails. */
+    readonly footprintModelFit: (designDirectory: string, name: string) => Effect.Effect<ModelFit>;
     readonly upgradeLibraries: (input: {
       readonly symbols: string;
       readonly footprints: string;
@@ -1460,7 +1465,7 @@ atexit.register(_kitty_leave)
     const { file, relative } = yield* resolveDesign(input.workspaceRoot, input.path, ".kicad_pcb");
     const cli = yield* findCli();
     yield* seatLibraryModels(path.dirname(file));
-    yield* seatBoard(file);
+    const models = yield* seatBoard(file);
     return yield* Effect.scoped(
       Effect.gen(function* () {
         const temp = yield* fs
@@ -1492,6 +1497,7 @@ atexit.register(_kitty_leave)
           file: relative,
           glb: Buffer.from(bytes).toString("base64"),
           detailed: bytes === detailed,
+          models,
         } satisfies KicadBoardModelResult;
       }),
     );
@@ -1547,17 +1553,35 @@ atexit.register(_kitty_leave)
     }
   });
 
-  /** Seats the models of the parts already on a board, so its 3D view shows them where they sit. */
+  const footprintModelFit = Effect.fn("KicadService.footprintModelFit")(function* (
+    designDirectory: string,
+    name: string,
+  ) {
+    const file = path.join(designDirectory, "lib", "jlc.pretty", `${name}.kicad_mod`);
+    const source = yield* fs.readFileString(file).pipe(Effect.option);
+    const model = Option.isSome(source) ? modelPath(source.value) : undefined;
+    if (Option.isNone(source) || !model) {
+      return { status: "unchecked", note: "It has no 3D model." } satisfies ModelFit;
+    }
+    return modelFit(source.value, yield* modelShapes(model, designDirectory));
+  });
+
+  /**
+   * Seats the models of the parts already on a board, so its 3D view shows them
+   * where they sit, and says which still do not.
+   */
   const seatBoard = Effect.fn("KicadService.seatBoard")(function* (file: string) {
     const directory = path.dirname(file);
     const board = yield* fs.readFileString(file).pipe(Effect.option);
-    if (Option.isNone(board)) return;
+    if (Option.isNone(board)) return [];
     const shapes = new Map<string, ModelShapes>();
     for (const model of boardModelPaths(board.value)) {
       shapes.set(model, yield* modelShapes(model, directory));
     }
-    const seated = seatBoardModels(board.value, (model) => shapes.get(model) ?? {});
+    const shapesOf = (model: string) => shapes.get(model) ?? {};
+    const seated = seatBoardModels(board.value, shapesOf);
     if (seated !== board.value) yield* fs.writeFileString(file, seated).pipe(Effect.ignore);
+    return boardModelFits(seated, shapesOf).filter(({ fit }) => fit.status !== "fits");
   });
 
   const upgradeLibraries = Effect.fn("KicadService.upgradeLibraries")(function* (input: {
@@ -1875,6 +1899,7 @@ atexit.register(_kitty_leave)
     boardSync,
     boardEdit,
     seatLibraryModels,
+    footprintModelFit,
     upgradeLibraries,
     boardModel,
     designStamp,

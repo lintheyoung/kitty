@@ -432,7 +432,7 @@ const JlcPartSearchTool = Tool.make("jlc_part_search", {
 
 const JlcPartImportTool = Tool.make("jlc_part_import", {
   description:
-    "Bring a JLC part into a design by its LCSC number: its symbol, footprint and 3D model go into the design's lib/jlc library, with the LCSC number on the symbol for the BOM. Returns the symbol and footprint ids and the pins. Importing a part again updates it.",
+    "Bring a JLC part into a design by its LCSC number: its symbol, footprint and 3D model go into the design's lib/jlc library, with the LCSC number on the symbol for the BOM. Returns the symbol and footprint ids and the pins, and `model`: whether the 3D model sits on the footprint. That checks position only, never which way round the part faces, so pin 1 still needs a look in the 3D view. Importing a part again updates it.",
   parameters: JlcPartImportInput,
   success: JlcImportedPart,
   failure: HardwareFailure,

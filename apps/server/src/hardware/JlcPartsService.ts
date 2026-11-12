@@ -233,6 +233,10 @@ const make = Effect.fn("JlcPartsService.make")(function* () {
             described.properties.ki_description ?? described.properties.Description ?? "",
           pins: [...described.pins],
           library: path.relative(input.workspaceRoot, librarySymbolFile),
+          model: yield* kicad.footprintModelFit(
+            designDirectory,
+            (described.properties.Footprint ?? "").split(":").at(-1) ?? "",
+          ),
         } satisfies JlcImportedPart;
       }),
     );

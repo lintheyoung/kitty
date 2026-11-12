@@ -2,6 +2,7 @@
  * Seating a part's 3D model on its footprint. JLC's converter places the VRML mesh but
  * leaves the STEP solid, the one a board model is built from, centred on itself.
  */
+import type { ModelFit } from "@t3tools/contracts";
 import { children, numbers, parseSexpr, value, type Sexpr } from "@t3tools/shared/kicad/sexpr";
 
 export interface Extent {
@@ -164,6 +165,64 @@ export function seatModel(source: string, shapes: ModelShapes): string {
   );
 }
 
+const MODEL_SHOWN =
+  /\(model\s+"([^"]+)"[\s\S]*?\(offset\s*\(xyz\s+(\S+)\s+(\S+)\s+([^\s)]+)\s*\)[\s\S]*?\(rotate\s*\(xyz\s+\S+\s+\S+\s+(-?[\d.]+)/;
+
+/** How far, in millimetres, a model may rise above or sink below where it should stand. */
+const OFF_HEIGHT = 0.2;
+const millimetres = (value: number) => `${Math.round(value * 10) / 10} mm`;
+
+/**
+ * Whether the model a footprint shows sits on that footprint: on the body the
+ * footprint draws when the model is that body's size, else where the
+ * converter put its mesh, and standing on the board at the mesh's height.
+ */
+export function modelFit(source: string, shapes: ModelShapes): ModelFit {
+  const shown = MODEL_SHOWN.exec(source);
+  if (!shown) return { status: "unchecked", note: "It has no 3D model." };
+  const solid = /\.ste?p$/i.test(shown[1] ?? "");
+  const model = solid ? shapes.step : shapes.wrl;
+  if (!model) return { status: "unchecked", note: "Its 3D model could not be measured." };
+  const mesh = solid ? shapes.wrl : undefined;
+  const offset = { x: Number(shown[2]), y: Number(shown[3]), z: Number(shown[4]) };
+  const angle = ((Number(shown[5]) % 360) + 360) % 360;
+  let apart: number | undefined;
+  if (angle === 0 || angle === 180) {
+    const sits = landed(model, angle === 180);
+    const at = { x: middle(sits).x + offset.x, y: middle(sits).y - offset.y };
+    let body: Extent | undefined;
+    try {
+      body = bodyExtent(parseSexpr(source));
+    } catch {
+      body = undefined;
+    }
+    const drawn =
+      body &&
+      alike(sits.maxX - sits.minX, body.maxX - body.minX) &&
+      alike(sits.maxY - sits.minY, body.maxY - body.minY)
+        ? middle(body)
+        : mesh && middle(landed(mesh, angle === 180));
+    if (drawn) apart = Math.hypot(at.x - drawn.x, at.y - drawn.y);
+  } else if (mesh && offset.x === 0 && offset.y === 0) {
+    // Turned sideways, both files turn alike, so they are compared before the turn.
+    apart = Math.hypot(middle(model).x - middle(mesh).x, middle(model).y - middle(mesh).y);
+  } else if (mesh) {
+    return { status: "unchecked", note: "Its 3D model is turned sideways and moved by hand." };
+  }
+  if (apart !== undefined && apart >= OFF_CENTRE) {
+    return { status: "off", note: `Its 3D model sits ${millimetres(apart)} off its footprint.` };
+  }
+  const height = mesh ? model.minZ + offset.z - mesh.minZ : 0;
+  if (Math.abs(height) >= OFF_HEIGHT) {
+    const where = height < 0 ? "into" : "above";
+    return {
+      status: "off",
+      note: `Its 3D model sits ${millimetres(Math.abs(height))} ${where} the board.`,
+    };
+  }
+  return { status: "fits" };
+}
+
 /** The model a footprint shows, as the footprint names it. */
 export function modelPath(source: string): string | undefined {
   return /\(model\s+"?([^"\s)]+)/.exec(source)?.[1];
@@ -185,6 +244,22 @@ function blockEnd(source: string, start: number): number {
   return source.length;
 }
 
+/** The footprints of a board, each with whether it is on the front. */
+function footprintBlocks(board: string) {
+  const blocks: Array<{ block: string; front: boolean; start: number; end: number }> = [];
+  let cursor = 0;
+  for (const match of board.matchAll(/\(footprint\s/g)) {
+    const start = match.index;
+    if (start < cursor) continue;
+    const end = blockEnd(board, start);
+    const block = board.slice(start, end);
+    const front = !/^\(footprint\s+"[^"]*"\s*\(layer\s+"B\.Cu"\)/.test(block);
+    blocks.push({ block, front, start, end });
+    cursor = end;
+  }
+  return blocks;
+}
+
 /** The models a board's footprints show, as the board names them. */
 export function boardModelPaths(board: string): ReadonlyArray<string> {
   return [
@@ -192,18 +267,32 @@ export function boardModelPaths(board: string): ReadonlyArray<string> {
   ];
 }
 
+/** How each part's model sits on a board; parts on the back are stored mirrored and not read. */
+export function boardModelFits(
+  board: string,
+  shapesOf: (model: string) => ModelShapes,
+): ReadonlyArray<{ readonly reference: string; readonly fit: ModelFit }> {
+  const fits: Array<{ readonly reference: string; readonly fit: ModelFit }> = [];
+  for (const { block, front } of footprintBlocks(board)) {
+    const reference = /\(property\s+"Reference"\s+"([^"]*)"/.exec(block)?.[1];
+    const model = modelPath(block);
+    if (!reference || !model) continue;
+    fits.push({
+      reference,
+      fit: front
+        ? modelFit(block, shapesOf(model))
+        : { status: "unchecked", note: "It is on the back of the board." },
+    });
+  }
+  return fits;
+}
+
 /** A board with the models of its front-side parts seated, as `seatModel` does for a footprint. */
 export function seatBoardModels(board: string, shapesOf: (model: string) => ModelShapes): string {
   let result = "";
   let cursor = 0;
-  for (const match of board.matchAll(/\(footprint\s/g)) {
-    const start = match.index;
-    if (start < cursor) continue;
-    const end = blockEnd(board, start);
-    const block = board.slice(start, end);
+  for (const { block, front, start, end } of footprintBlocks(board)) {
     const model = modelPath(block);
-    // A part on the back is stored mirrored, which this does not read.
-    const front = !/^\(footprint\s+"[^"]*"\s*\(layer\s+"B\.Cu"\)/.test(block);
     result +=
       board.slice(cursor, start) + (model && front ? seatModel(block, shapesOf(model)) : block);
     cursor = end;

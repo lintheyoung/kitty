@@ -1,5 +1,7 @@
 import * as Schema from "effect/Schema";
 
+import { ModelFit } from "./jlcParts.ts";
+
 /** Kitty's KiCad 10 adapter (`kicad-cli`). See docs/kitty/开发计划.md, Sprint 3. */
 
 const KicadPath = (description: string) => Schema.String.annotate({ description });
@@ -599,6 +601,8 @@ export const KicadBoardModelResult = Schema.Struct({
   glb: Schema.String,
   /** False when silkscreen and solder mask were left out to keep the model small. */
   detailed: Schema.Boolean,
+  /** The parts whose 3D model does not sit on its footprint, or could not be checked. */
+  models: Schema.Array(Schema.Struct({ reference: Schema.String, fit: ModelFit })),
 });
 export type KicadBoardModelResult = typeof KicadBoardModelResult.Type;
 
