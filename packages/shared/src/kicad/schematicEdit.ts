@@ -993,11 +993,12 @@ interface Piece {
   /** Where a net's wire gets its name: a power symbol or a label, pointing along `out`. */
   readonly names: ReadonlyArray<{ readonly at: Point; readonly out: Point; readonly net: string }>;
 }
-/** A two-pin part with its pins in line, which can sit in a wire. */
+/** A part with all its pins on two nets, which can stand between the lines of those nets. */
 interface Link {
   readonly member: Member;
   readonly nets: readonly [string, string];
-  readonly pins: readonly [string, string];
+  /** The net of each connected pin, by pin number. */
+  readonly on: Readonly<Record<string, string>>;
 }
 
 /** Wire kept between a pin and the line it joins. */
@@ -1008,15 +1009,41 @@ const onGrid = (value: number) => snap(Math.ceil(value / GRID - 1e-6) * GRID);
 const kindOf = (session: Session, net: string) =>
   GROUND.test(net) ? 2 : isRail(session, net) ? 0 : 1;
 
+/**
+ * The turn at which a part stands between `upper` and `lower`: pins pointing up are on
+ * the upper net, pins pointing down on the lower, and on each side the upper ones are higher.
+ */
+function turnBetween(link: Link, upper: string, lower: string): number | undefined {
+  const mirror = mirrorOf(link.member.part);
+  const fitting = [0, 90, 180, 270].flatMap((turn) => {
+    const pins = placedPins(link.member.library, { x: 0, y: 0 }, turn, mirror).filter(
+      (pin) => link.on[pin.number],
+    );
+    const upright = pins.filter((pin) => pin.out.y !== 0);
+    const sorted = [-1, 1].every((side) => {
+      const heights = (net: string) =>
+        pins
+          .filter((pin) => pin.out.x === side && link.on[pin.number] === net)
+          .map((pin) => pin.at.y);
+      return Math.max(-Infinity, ...heights(upper)) < Math.min(Infinity, ...heights(lower));
+    });
+    const fits =
+      sorted && upright.every((pin) => link.on[pin.number] === (pin.out.y < 0 ? upper : lower));
+    return fits ? [{ turn, upright: upright.length }] : [];
+  });
+  // Pins that point at their line need no wire around the part.
+  return fitting.sort((a, b) => b.upright - a.upright)[0]?.turn;
+}
+
 function linkOf(member: Member, nets: Readonly<Record<string, string>>): Link | undefined {
-  const [first, second] = placedPins(member.library, { x: 0, y: 0 }, 0, mirrorOf(member.part));
-  if (member.pins.length !== 2 || !first || !second) return undefined;
-  const opposed = first.out.x === -second.out.x && first.out.y === -second.out.y;
-  const inLine = first.out.x !== 0 ? first.at.y === second.at.y : first.at.x === second.at.x;
-  const a = nets[first.number];
-  const b = nets[second.number];
-  if (!opposed || !inLine || !a || !b || a === b) return undefined;
-  return { member, nets: [a, b], pins: [first.number, second.number] };
+  const on = Object.fromEntries(
+    member.pins.flatMap((pin) => (nets[pin.number] ? [[pin.number, nets[pin.number]]] : [])),
+  ) as Record<string, string>;
+  const [a, b, ...more] = [...new Set(Object.values(on))];
+  if (!a || !b || more.length > 0 || member.pins.length > 8) return undefined;
+  const link: Link = { member, nets: [a, b], on };
+  const stands = turnBetween(link, a, b) !== undefined && turnBetween(link, b, a) !== undefined;
+  return stands ? link : undefined;
 }
 
 /**
@@ -1026,7 +1053,8 @@ function linkOf(member: Member, nets: Readonly<Record<string, string>>): Link | 
 function ladder(session: Session, links: ReadonlyArray<Link>): Piece {
   const uses = new Map<string, number>();
   for (const link of links) {
-    for (const net of link.nets) uses.set(net, (uses.get(net) ?? 0) + 1);
+    // A net is drawn as a line once two pins meet on it, of two parts or of one.
+    for (const net of Object.values(link.on)) uses.set(net, (uses.get(net) ?? 0) + 1);
   }
   const kind = (net: string) => kindOf(session, net);
   // How many parts lie between a net and the nearest rail, or the nearest ground.
@@ -1066,23 +1094,33 @@ function ladder(session: Session, links: ReadonlyArray<Link>): Piece {
     const la = level.get(a);
     const lb = level.get(b);
     const firstUp = la && lb ? la < lb : la ? !above(b, a) : lb ? above(a, b) : kind(a) <= kind(b);
-    const top = firstUp ? 0 : 1;
+    const upperNet = firstUp ? a : b;
+    const lowerNet = firstUp ? b : a;
     const mirror = mirrorOf(link.member.part);
-    const pinsAt = (turn: number) => placedPins(link.member.library, { x: 0, y: 0 }, turn, mirror);
-    const rotation =
-      [0, 90, 180, 270].find(
-        (turn) => pinsAt(turn).find((pin) => pin.number === link.pins[top])?.out.y === -1,
-      ) ?? 0;
-    const pins = pinsAt(rotation);
-    const pinAt = (index: number) =>
-      pins.find((pin) => pin.number === link.pins[index])?.at ?? { x: 0, y: 0 };
-    const upper = level.get(link.nets[top]);
-    const lower = level.get(link.nets[1 - top] as string);
-    const hanging = Object.fromEntries(
-      [0, 1]
-        .filter((index) => !level.has(link.nets[index] as string))
-        .map((index) => [link.pins[index], link.nets[index]]),
+    const rotation = turnBetween(link, upperNet, lowerNet) ?? 0;
+    const pins = placedPins(link.member.library, { x: 0, y: 0 }, rotation, mirror).filter(
+      (pin) => link.on[pin.number],
     );
+    const netOf = (pin: Pin) => link.on[pin.number] as string;
+    const upper = level.get(upperNet);
+    const lower = level.get(lowerNet);
+    const wired = pins.filter((pin) => level.has(netOf(pin)));
+    const box = footprintBox(
+      link.member.library,
+      rotation,
+      mirror,
+      Object.fromEntries(
+        pins.filter((pin) => !level.has(netOf(pin))).map((pin) => [pin.number, netOf(pin)]),
+      ),
+    );
+    // Wires from pins on the sides run up or down beside the part, past its body.
+    const sides = pins.some((pin) => pin.out.x !== 0);
+    const body = sides ? footprintBox(link.member.library, rotation, mirror, {}) : undefined;
+    const tips = (out: number) => pins.filter((pin) => pin.out.y === out).map((pin) => pin.at.y);
+    const trunk = (side: number) => {
+      const reach = wired.filter((pin) => pin.out.x === side).map((pin) => pin.at.x * side);
+      return reach.length > 0 ? side * (Math.max(...reach) + LEAD) : undefined;
+    };
     return {
       link,
       rotation,
@@ -1091,28 +1129,22 @@ function ladder(session: Session, links: ReadonlyArray<Link>): Piece {
       // The bands, counted from the top, that the part stands in.
       from: upper ?? (lower ?? 1) - 1,
       to: lower ? lower - 1 : (upper ?? 0),
-      topPin: pinAt(top),
-      footPin: pinAt(1 - top),
-      box: footprintBox(link.member.library, rotation, mirror, hanging),
-      wired: new Set(
-        [0, 1]
-          .filter((index) => level.has(link.nets[index] as string))
-          .map((index) => link.pins[index] as string),
-      ),
+      // Where the part begins and ends between its lines.
+      head: upper ? Math.min(body?.minY ?? Infinity, ...tips(-1)) : box.minY,
+      foot: lower ? Math.max(body?.maxY ?? -Infinity, ...tips(1)) : box.maxY,
+      minX: Math.min(box.minX, trunk(-1) ?? 0),
+      maxX: Math.max(box.maxX, trunk(1) ?? 0),
+      trunk,
+      netOf,
+      wired,
     };
   });
 
   // Band k lies under line k; the first is above every line, the last below them all.
   const bands: Array<number> = lines.map((net) => (kind(net) === 0 ? SYMBOL_ROOM : LEAD));
   bands.push(lines.length > 0 && kind(lines.at(-1) as string) === 2 ? SYMBOL_ROOM : LEAD);
-  const span = (part: (typeof stood)[number]) => part.footPin.y - part.topPin.y;
   for (const part of stood) {
-    const needs =
-      part.upper && part.lower
-        ? span(part) + 2 * LEAD
-        : part.lower
-          ? part.footPin.y - part.box.minY + LEAD
-          : part.box.maxY - part.topPin.y + LEAD;
+    const needs = part.foot - part.head + (part.upper ? LEAD : 0) + (part.lower ? LEAD : 0);
     const have = bands.slice(part.from, part.to + 1).reduce((sum, size) => sum + size, 0);
     if (needs > have) bands[part.to] = onGrid((bands[part.to] ?? 0) + needs - have);
   }
@@ -1146,31 +1178,59 @@ function ladder(session: Session, links: ReadonlyArray<Link>): Piece {
   const joins = new Map<string, Array<number>>();
   const columnAt = new Map<number, Set<number>>();
   let cursor = nameRoom + LEAD;
+  const junctions: Array<Point> = [];
   for (const column of columns) {
-    const x = onGrid(cursor + Math.max(...column.parts.map((part) => -part.box.minX)));
+    const x = onGrid(cursor + Math.max(...column.parts.map((part) => -part.minX)));
+    const join = (net: string, at: number) => {
+      joins.set(net, [...(joins.get(net) ?? []), at]);
+      columnAt.set(at, column.taken);
+    };
     for (const part of column.parts) {
       const y = part.upper
-        ? lineY(part.upper) + LEAD - part.topPin.y
-        : lineY(part.lower ?? 0) - LEAD - part.footPin.y;
-      spots.push({ member: part.link.member, rotation: part.rotation, x, y, wired: part.wired });
-      const pinX = x + part.topPin.x;
-      columnAt.set(pinX, column.taken);
-      for (const [line, pinY] of [
-        [part.upper, y + part.topPin.y],
-        [part.lower, y + part.footPin.y],
-      ] as const) {
-        if (!line) continue;
-        wires.push([
-          { x: pinX, y: pinY },
-          { x: pinX, y: lineY(line) },
-        ]);
-        const net = lines[line - 1] as string;
-        joins.set(net, [...(joins.get(net) ?? []), pinX]);
+        ? lineY(part.upper) + LEAD - part.head
+        : lineY(part.lower ?? 0) - LEAD - part.foot;
+      spots.push({
+        member: part.link.member,
+        rotation: part.rotation,
+        x,
+        y,
+        wired: new Set(part.wired.map((pin) => pin.number)),
+      });
+      const lineOf = (net: string) => lineY(level.get(net) ?? 0);
+      for (const pin of part.wired.filter((wire) => wire.out.y !== 0)) {
+        const at = { x: x + pin.at.x, y: y + pin.at.y };
+        wires.push([at, { x: at.x, y: lineOf(part.netOf(pin)) }]);
+        join(part.netOf(pin), at.x);
+      }
+      for (const side of [-1, 1]) {
+        for (const net of new Set(part.wired.map(part.netOf))) {
+          const beside = part.wired.filter((pin) => pin.out.x === side && part.netOf(pin) === net);
+          if (beside.length === 0) continue;
+          const at = x + (part.trunk(side) ?? 0);
+          const far = (pin: Pin) => Math.abs(y + pin.at.y - lineOf(net));
+          const stops = [
+            lineOf(net),
+            ...beside.sort((a, b) => far(a) - far(b)).map((pin) => y + pin.at.y),
+          ];
+          stops.slice(1).forEach((stop, index) => {
+            wires.push([
+              { x: at, y: stops[index] as number },
+              { x: at, y: stop },
+            ]);
+            if (index < stops.length - 2) junctions.push({ x: at, y: stop });
+          });
+          for (const pin of beside) {
+            wires.push([
+              { x: x + pin.at.x, y: y + pin.at.y },
+              { x: at, y: y + pin.at.y },
+            ]);
+          }
+          join(net, at);
+        }
       }
     }
-    cursor = x + Math.max(...column.parts.map((part) => part.box.maxX)) + LEAD;
+    cursor = x + Math.max(...column.parts.map((part) => part.maxX)) + LEAD;
   }
-  const junctions: Array<Point> = [];
   const names = lines.map((net, index) => {
     const y = lineY(index + 1);
     const leads = [...(joins.get(net) ?? [])].sort((a, b) => a - b);
@@ -1197,7 +1257,7 @@ function ladder(session: Session, links: ReadonlyArray<Link>): Piece {
   return { width: cursor - LEAD, height: lineY(bands.length), spots, wires, junctions, names };
 }
 
-/** Groups a block's two-pin parts by the nets they share, each group to be drawn as one ladder. */
+/** Groups a block's parts by the nets they share, each group to be drawn as one ladder. */
 function ladders(session: Session, links: ReadonlyArray<Link>): ReadonlyArray<ReadonlyArray<Link>> {
   const shared = new Map<string, Array<Link>>();
   for (const link of links) {
@@ -1322,15 +1382,15 @@ function tidy(session: Session, placed: Array<PlacedPart>): ReadonlyArray<string
       };
     };
     const byReference = (a: { first: string }, b: { first: string }) => naturally(a.first, b.first);
+    const groups = ladders(
+      session,
+      members.flatMap((member) => linkOf(member, netsOf(member)) ?? []),
+    );
+    const drawn = new Set(groups.flat().map((link) => link.member));
     const big = members
-      .filter((member) => member.big)
+      .filter((member) => member.big && !drawn.has(member))
       .sort((a, b) => b.pins.length - a.pins.length)
       .map(alone);
-    const links = members.flatMap((member) =>
-      member.big ? [] : (linkOf(member, netsOf(member)) ?? []),
-    );
-    const groups = ladders(session, links);
-    const drawn = new Set(groups.flat().map((link) => link.member));
     const small = [
       ...groups.map((group) => ({
         ...ladder(session, group),
@@ -1349,33 +1409,36 @@ function tidy(session: Session, placed: Array<PlacedPart>): ReadonlyArray<string
     }
     height = Math.max(0, height - 2 * SPACING);
     if (small.length > 0) {
-      // Rows as long as it takes to stand about as tall as the big parts, or to look square.
-      const area = small.reduce(
-        (sum, piece) => sum + (piece.width + SPACING) * (piece.height + SPACING),
-        0,
-      );
-      const widest = Math.max(...small.map((piece) => piece.width));
-      const limit = Math.max(
-        widest,
-        big.length > 0 ? (1.3 * area) / Math.max(height, 1) : 0,
-        1.6 * Math.sqrt(area) * (big.length > 0 ? 0.5 : 1),
-      );
-      const left = big.length > 0 ? width + 2 * SPACING : 0;
-      let x = 0;
-      let y = 0;
-      let tall = 0;
-      for (const piece of small) {
-        if (x > 0 && x + piece.width > limit) {
-          x = 0;
-          y += tall + SPACING;
-          tall = 0;
+      const left = big.length > 0 ? width + SPACING : 0;
+      const inRows = (limit: number) => {
+        const rows: Array<{ piece: Piece; x: number; y: number }> = [];
+        let x = 0;
+        let y = 0;
+        let tall = 0;
+        let wide = 0;
+        for (const piece of small) {
+          if (x > 0 && x + piece.width > limit) {
+            x = 0;
+            y += tall + SPACING;
+            tall = 0;
+          }
+          rows.push({ piece, x: left + x, y });
+          x += piece.width + SPACING;
+          tall = Math.max(tall, piece.height);
+          wide = Math.max(wide, left + x - SPACING);
         }
-        pieces.push({ piece, x: left + x, y });
-        x += piece.width + SPACING;
-        tall = Math.max(tall, piece.height);
-        width = Math.max(width, left + x - SPACING);
+        return { rows, width: Math.max(width, wide), height: Math.max(height, y + tall) };
+      };
+      // Of every way to break the rows, the one that keeps the block most compact.
+      let reach = -SPACING;
+      const best = small
+        .map((piece) => inRows((reach += piece.width + SPACING)))
+        .sort((a, b) => a.width * a.height - b.width * b.height)[0];
+      if (best) {
+        pieces.push(...best.rows);
+        width = best.width;
+        height = best.height;
       }
-      height = Math.max(height, y + tall);
     }
     return {
       name,

@@ -21,6 +21,18 @@ const LIBRARY = `(kicad_symbol_lib
       (rectangle (start -2.54 1.016) (end 2.54 -1.016))${pin("1", "A", -5.08, 0)}${pin("2", "B", 5.08, 180)}
     )
   )
+  (symbol "SW"
+    (in_bom yes) (on_board yes)
+    (property "Reference" "SW" (at 0 5.08 0))
+    (property "Value" "SW" (at 0 -5.08 0))
+    (symbol "SW_0_1"
+      (rectangle (start -2.54 2.54) (end 2.54 -2.54))
+      (pin passive line (at -5.08 1.27 0) (length 2.54) (name "A") (number "1"))
+      (pin passive line (at 5.08 1.27 180) (length 2.54) (name "B") (number "2"))
+      (pin passive line (at -5.08 -1.27 0) (length 2.54) (name "C") (number "3"))
+      (pin passive line (at 5.08 -1.27 180) (length 2.54) (name "D") (number "4"))
+    )
+  )
   (symbol "GND"
     (power global)
     (property "Reference" "#PWR" (at 0 -6.35 0) (hide yes))
@@ -63,7 +75,7 @@ function context(): EditContext {
     uuid: () => `00000000-0000-0000-0000-${String(++next).padStart(12, "0")}`,
     symbol: (libId): ReadonlyArray<Node> | undefined => {
       const [library, name = ""] = libId.split(":");
-      if (library === "jlc") return name === "R" ? symbols.get("R") : undefined;
+      if (library === "jlc") return name === "R" || name === "SW" ? symbols.get(name) : undefined;
       return library === "power" && name !== "R" ? symbols.get(name) : undefined;
     },
   };
@@ -292,6 +304,34 @@ describe("schematic edits", () => {
     );
     const { "R4.1": _one, "R4.2": _two, ...rest } = netsOf(drawn.source);
     expect(netsOf(removed.source)).toEqual(rest);
+  });
+
+  it("wires a part with pins on its sides between the lines of its two nets", () => {
+    const drawn = applySchematicEdits(
+      BLANK,
+      [
+        { op: "place", symbol: "jlc:R", group: "Buttons", nets: { "1": "+3V3", "2": "EN" } },
+        {
+          op: "place",
+          symbol: "jlc:SW",
+          group: "Buttons",
+          nets: { "1": "GND", "2": "GND", "3": "EN", "4": "EN" },
+        },
+      ],
+      context(),
+    );
+    const tidied = applySchematicEdits(drawn.source, [{ op: "tidy" }], context());
+    expect(netsOf(tidied.source)).toEqual(netsOf(drawn.source));
+    const count = (text: string, token: string) => text.split(token).length - 1;
+    // Both pins of each net reach one line, so each net is named once.
+    expect(count(tidied.source, '(label "EN"')).toBe(1);
+    expect(count(tidied.source, '(lib_id "power:GND")')).toBe(1);
+    // The switch is turned over so that its EN pins are the upper ones.
+    const turn = Object.fromEntries(tidied.placed.map((placed) => [placed.reference, placed]));
+    expect(turn.SW1?.rotation).toBe(180);
+    const twice = applySchematicEdits(tidied.source, [{ op: "tidy" }], context());
+    expect(netsOf(twice.source)).toEqual(netsOf(drawn.source));
+    expect(twice.placed).toEqual(tidied.placed);
   });
 
   it("moves a part with its connections and removes them with the part", () => {
