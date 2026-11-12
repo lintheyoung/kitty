@@ -1,7 +1,8 @@
+import { buildBoardScene } from "@t3tools/shared/kicad/boardScene";
+import { finishingEdits } from "@t3tools/shared/kicad/boardFinish";
 import { assert, it } from "vite-plus/test";
 
 import {
-  finishingEdits,
   freeroutingArgs,
   javaCandidates,
   parseAutorouteReport,
@@ -58,13 +59,15 @@ const boardOf = (net: string, extra = "") => `(kicad_pcb (version 20241229)
   ${extra})`;
 
 it("finishes a routed board with a ground pour and tidy references", () => {
-  assert.deepEqual(finishingEdits(boardOf("/GND")), [
+  assert.deepEqual(finishingEdits(buildBoardScene(boardOf("/GND"))), [
     { op: "pour", net: "/GND" },
     { op: "tidy_labels" },
   ]);
   // No ground net, or a pour already there: only the references are tidied.
-  assert.deepEqual(finishingEdits(boardOf("+3V3")), [{ op: "tidy_labels" }]);
+  assert.deepEqual(finishingEdits(buildBoardScene(boardOf("+3V3"))), [{ op: "tidy_labels" }]);
   const poured = `(zone (net 1) (net_name "GND") (layer "F.Cu") (uuid "z")
     (polygon (pts (xy 0 0) (xy 9 0) (xy 9 9))))`;
-  assert.deepEqual(finishingEdits(boardOf("GND", poured)), [{ op: "tidy_labels" }]);
+  assert.deepEqual(finishingEdits(buildBoardScene(boardOf("GND", poured))), [
+    { op: "tidy_labels" },
+  ]);
 });

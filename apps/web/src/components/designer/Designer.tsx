@@ -1,4 +1,5 @@
 import type { KicadDesignSourceResult, ProjectId, ScopedThreadRef } from "@t3tools/contracts";
+import { finishingEdits } from "@t3tools/shared/kicad/boardFinish";
 import { buildBoardScene } from "@t3tools/shared/kicad/boardScene";
 import { displayNet, sameNet } from "@t3tools/shared/kicad/pick";
 import { ratsnest } from "@t3tools/shared/kicad/ratsnest";
@@ -13,6 +14,7 @@ import {
   LayersIcon,
   MessageSquareIcon,
   PackageSearchIcon,
+  PaintBucketIcon,
   PencilIcon,
   PencilLineIcon,
   RatioIcon,
@@ -1063,6 +1065,17 @@ function DesignerView(props: {
           >
             <WaypointsIcon className={cn(sync.routing && "animate-pulse")} />
             Auto-route
+          </Button>
+        ) : null}
+        {boardEditable && scene.items.some((item) => item.kind === "footprint") ? (
+          <Button
+            size="xs"
+            variant="ghost-muted"
+            disabled={sync.busy || editor.busy}
+            onClick={() => void editor.applyBoard([...finishingEdits(scene)])}
+          >
+            <PaintBucketIcon />
+            Pour & tidy
           </Button>
         ) : null}
         {boardEditable && boardWires.length === 0 && scene.items.length > 0 ? (

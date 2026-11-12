@@ -1,23 +1,4 @@
 /** Routing a board with Freerouting: KiCad's Python hands the board over and takes the tracks back. */
-import type { BoardEdit } from "@t3tools/contracts";
-import { buildBoardScene } from "@t3tools/shared/kicad/boardScene";
-
-/**
- * What a routed board still needs to be a finished one: ground poured over the
- * free copper, unless the board already has a pour, and readable references.
- */
-export function finishingEdits(source: string): ReadonlyArray<BoardEdit> {
-  const scene = buildBoardScene(source);
-  const poured = scene.items.some((item) => item.kind === "zone" && item.net !== undefined);
-  const ground = scene.items.find(
-    (item) => item.kind === "pad" && item.net?.replace(/^\//, "").toUpperCase() === "GND",
-  )?.net;
-  return [
-    ...(ground && !poured ? [{ op: "pour", net: ground } as const] : []),
-    { op: "tidy_labels" },
-  ];
-}
-
 /** Java to run the router with: KITTY_JAVA, JAVA_HOME, PATH, then where Homebrew puts it. */
 export function javaCandidates(env: NodeJS.ProcessEnv): ReadonlyArray<string> {
   const configured = env.KITTY_JAVA?.trim();

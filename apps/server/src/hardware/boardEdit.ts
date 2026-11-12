@@ -253,6 +253,8 @@ def tidy_labels():
     bodies = []
     for fp in board.GetFootprints():
         box = fp.GetBoundingBox(False)
+        for pad in fp.Pads():
+            box.Merge(pad.GetBoundingBox())
         bodies.append((fp, (box.GetLeft(), box.GetTop(), box.GetRight(), box.GetBottom())))
     # Small parts choose first: they have the fewest places to put a reference.
     bodies.sort(key=lambda entry: (entry[1][2] - entry[1][0]) * (entry[1][3] - entry[1][1]))
@@ -272,8 +274,13 @@ def tidy_labels():
         above, below = body[1] - gap - h / 2, body[3] + gap + h / 2
         right, left = body[2] + gap + w / 2, body[0] - gap - w / 2
         best = None
-        for x, y in ((cx, above), (cx, below), (right, cy), (left, cy),
-                     (right, above), (left, above), (right, below), (left, below)):
+        # Along each side: the middle first, then towards either end, then the corners.
+        along_x = (cx, body[0] + w / 2, body[2] - w / 2)
+        along_y = (cy, body[1] + h / 2, body[3] - h / 2)
+        places = ([(x, above) for x in along_x] + [(x, below) for x in along_x]
+                  + [(right, y) for y in along_y] + [(left, y) for y in along_y]
+                  + [(right, above), (left, above), (right, below), (left, below)])
+        for x, y in places:
             box = (x - w / 2, y - h / 2, x + w / 2, y + h / 2)
             cost = sum(1 for other, other_body in bodies
                        if other is not fp and other.IsFlipped() == back and overlap(box, other_body))

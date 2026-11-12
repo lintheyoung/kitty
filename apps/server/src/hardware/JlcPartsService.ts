@@ -205,6 +205,8 @@ const make = Effect.fn("JlcPartsService.make")(function* () {
           }
         }
 
+        yield* kicad.seatLibraryModels(designDirectory);
+
         const tables = [
           ["sym-lib-table", "symbol", `${JLC_LIBRARY}.kicad_sym`],
           ["fp-lib-table", "footprint", `${JLC_LIBRARY}.pretty`],

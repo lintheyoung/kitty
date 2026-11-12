@@ -191,6 +191,11 @@ def body(fp):
     box = fp.GetBoundingBox(False)
     return box.GetWidth(), box.GetHeight()
 
+def models(fp):
+    return [(model.m_Filename, model.m_Offset.x, model.m_Offset.y, model.m_Offset.z,
+             model.m_Rotation.x, model.m_Rotation.y, model.m_Rotation.z,
+             model.m_Scale.x, model.m_Scale.y, model.m_Scale.z) for model in fp.Models()]
+
 existing = {}
 for fp in board.GetFootprints():
     existing.setdefault(fp.GetReference(), fp)
@@ -224,6 +229,7 @@ for part in job["components"]:
     replaced = None
     if fp is not None and fp.GetFPIDAsString() != part["footprint"]:
         replaced, fp = fp, None
+    library = load(part["footprint"]) if fp is not None else None
     if fp is None:
         fp = load(part["footprint"])
         if fp is None:
@@ -246,6 +252,12 @@ for part in job["components"]:
             stage(fp)
             report["added"].append(ref)
     changed = False
+    # A part keeps its place, but takes its 3D models from the library as they are now.
+    if library is not None and models(library) != models(fp):
+        fp.Models().clear()
+        for model in library.Models():
+            fp.Add3DModel(model)
+        changed = True
     if fp.GetValue() != part["value"]:
         fp.SetValue(part["value"])
         changed = True

@@ -547,6 +547,10 @@
       "types": "./src/kicad/schematicScene.ts",
       "import": "./src/kicad/schematicScene.ts"
     },
+    "./kicad/boardFinish": {
+      "types": "./src/kicad/boardFinish.ts",
+      "import": "./src/kicad/boardFinish.ts"
+    },
     "./kicad/boardScene": {
       "types": "./src/kicad/boardScene.ts",
       "import": "./src/kicad/boardScene.ts"

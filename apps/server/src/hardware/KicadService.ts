@@ -62,12 +62,14 @@ import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as SchemaIssue from "effect/SchemaIssue";
 
 import * as ProcessRunner from "../processRunner.ts";
+import { buildBoardScene } from "@t3tools/shared/kicad/boardScene";
+import { finishingEdits } from "@t3tools/shared/kicad/boardFinish";
+import { modelPath, seatModel, wrlExtent } from "./modelPlacement.ts";
 import {
   AUTOROUTE_SCRIPT,
   autorouteJob,
   FREEROUTING_FOLDERS,
   FREEROUTING_MISSING,
-  finishingEdits,
   freeroutingArgs,
   javaCandidates,
   parseAutorouteReport,
@@ -159,6 +161,8 @@ export class KicadService extends Context.Service<
     ) => Effect.Effect<ReadonlyArray<string>, HardwareToolError>;
     /** SVG drawings of the schematic sheets or the board, for the panel. */
     /** Rewrites a symbol library file and a footprint library folder in KiCad's current format. */
+    /** Slides the 3D models of the design's JLC footprints onto their bodies; never fails. */
+    readonly seatLibraryModels: (designDirectory: string) => Effect.Effect<void>;
     readonly upgradeLibraries: (input: {
       readonly symbols: string;
       readonly footprints: string;
@@ -646,7 +650,9 @@ atexit.register(_kitty_leave)
     // Finishing is a bonus: when it fails, the routed board stands as it is.
     const routed = yield* readBoard;
     const finishing =
-      input.finish === false ? [] : yield* parseOrFail(() => finishingEdits(routed), "board");
+      input.finish === false
+        ? []
+        : yield* parseOrFail(() => finishingEdits(buildBoardScene(routed)), "board");
     const finished =
       finishing.length === 0
         ? undefined
@@ -722,6 +728,7 @@ atexit.register(_kitty_leave)
         path.join(path.dirname(symbols), "footprints"),
       ),
     );
+    yield* seatLibraryModels(directory);
     const stdout = yield* runKicadPython(
       BOARD_SYNC_SCRIPT,
       boardSyncJob(board.file, plan.components, libraries),
@@ -1499,6 +1506,26 @@ atexit.register(_kitty_leave)
     return { stamp: parts.join("|") } satisfies KicadDesignStampResult;
   });
 
+  const seatLibraryModels = Effect.fn("KicadService.seatLibraryModels")(function* (
+    designDirectory: string,
+  ) {
+    const footprints = path.join(designDirectory, "lib", "jlc.pretty");
+    const names = yield* fs.readDirectory(footprints).pipe(Effect.orElseSucceed(() => []));
+    for (const name of names) {
+      if (!name.endsWith(".kicad_mod")) continue;
+      const file = path.join(footprints, name);
+      const source = yield* fs.readFileString(file).pipe(Effect.option);
+      const model = Option.isSome(source) ? modelPath(source.value) : undefined;
+      if (Option.isNone(source) || !model) continue;
+      // The mesh is measured from the VRML copy the converter writes beside each model.
+      const mesh = model.replace("${KIPRJMOD}", designDirectory).replace(/\.[^./]+$/, ".wrl");
+      const shape = yield* fs.readFileString(mesh).pipe(Effect.option);
+      if (Option.isNone(shape)) continue;
+      const seated = seatModel(source.value, wrlExtent(shape.value));
+      if (seated !== source.value) yield* fs.writeFileString(file, seated).pipe(Effect.ignore);
+    }
+  });
+
   const upgradeLibraries = Effect.fn("KicadService.upgradeLibraries")(function* (input: {
     readonly symbols: string;
     readonly footprints: string;
@@ -1813,6 +1840,7 @@ atexit.register(_kitty_leave)
     boardAutoroute,
     boardSync,
     boardEdit,
+    seatLibraryModels,
     upgradeLibraries,
     boardModel,
     designStamp,
