@@ -17,6 +17,8 @@ type List = ReadonlyArray<Sexpr>;
 const THROUGH_PAINT = "through";
 const VIA_PAINT = "via";
 const HOLE_PAINT = "hole";
+/** Paint used by areas that tracks and vias must stay out of. */
+const KEEPOUT_PAINT = "keepout";
 
 const DEFAULT_WIDTH = 0.1;
 const TEXT_SIZE = 1;
@@ -421,7 +423,10 @@ export function buildBoardScene(source: string): Scene {
           const points = children(child(fill, "pts"), "xy").map(pointOf);
           shapes.push({ kind: "polygon", points, width: 0, paint: layer, fill: layer });
         }
-        const layer = value(node, "layer") ?? atoms(child(node, "layers"))[0] ?? "F.Cu";
+        const keepout = child(node, "keepout") !== undefined;
+        const layer = keepout
+          ? KEEPOUT_PAINT
+          : (value(node, "layer") ?? atoms(child(node, "layers"))[0] ?? "F.Cu");
         if (shapes.length === 0) {
           // An unfilled zone only has its drawn boundary.
           for (const outline of children(node, "polygon")) {
@@ -436,7 +441,7 @@ export function buildBoardScene(source: string): Scene {
           box: boxOfShapes(shapes),
           shapes,
           layer,
-          title: "Copper zone",
+          title: keepout ? `Keep-out area ${value(node, "name") ?? ""}`.trim() : "Copper zone",
           ...(net ? { net } : {}),
         });
         break;

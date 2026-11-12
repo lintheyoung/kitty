@@ -55,6 +55,7 @@ const BOARD: Palette = {
   through: "#e3b72e",
   via: "#ececec",
   hole: "#0b1d33",
+  keepout: "#ff8a3d",
   "F.SilkS": "#f2eda1",
   "B.SilkS": "#e8b2a7",
   "F.Fab": "#afafaf",
@@ -120,6 +121,7 @@ export function paintOrder(scene: Scene, paints: Iterable<string>): ReadonlyArra
     "through",
     "via",
     "hole",
+    "keepout",
     "F.SilkS",
     "F.CrtYd",
     "F.Fab",
@@ -129,7 +131,7 @@ export function paintOrder(scene: Scene, paints: Iterable<string>): ReadonlyArra
   return [...rest, ...fixed.filter((paint) => present.has(paint))];
 }
 
-const BOARD_SHOWN = /^(.*\.Cu|through|via|hole|[FB]\.SilkS|Edge\.Cuts)$/;
+const BOARD_SHOWN = /^(.*\.Cu|through|via|hole|keepout|[FB]\.SilkS|Edge\.Cuts)$/;
 
 /** Board layers drawn before the user changes anything: copper, silkscreen, outline. */
 export const shownByDefault = (scene: Scene, paint: string): boolean =>
@@ -150,6 +152,7 @@ export function layerLabel(paint: string): string {
     through: "Through-hole pads",
     via: "Vias",
     hole: "Holes",
+    keepout: "Keep-out areas",
   };
   const inner = innerIndex(paint);
   return names[paint] ?? (inner > 0 ? `Inner copper ${inner}` : paint);

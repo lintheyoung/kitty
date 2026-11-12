@@ -291,7 +291,9 @@ export function drawScene(
     for (const { item, shape } of entries) {
       if (!overlaps(item.box, visible) && shape.kind !== "text") continue;
       const focused = options.focus ? options.focus(item) : true;
-      ctx.globalAlpha = (focused ? 1 : DIMMED) * (item.kind === "zone" ? ZONE_ALPHA : 1);
+      ctx.globalAlpha =
+        (focused ? 1 : DIMMED) *
+        (item.kind === "zone" && shape.paint !== "keepout" ? ZONE_ALPHA : 1);
       ctx.strokeStyle = color;
       ctx.fillStyle = color;
       drawShape(ctx, shape, view, options);

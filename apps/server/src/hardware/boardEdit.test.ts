@@ -27,6 +27,7 @@ it("reads the board the script reports", () => {
     summary: ["Moved R1"],
     parts: [part("R2"), part("R10")],
     overlaps: [["R2", "R10"]],
+    keepouts: [],
   });
   assert.deepEqual(parseBoardReport('KITTY_BOARD {"error":"U9 is not on the board."}'), {
     error: "U9 is not on the board.",

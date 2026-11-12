@@ -1,5 +1,5 @@
 /** Changing a board: placing parts, its outline and its tracks, with KiCad's own Python writing the file. */
-import type { BoardEdit, BoardNet, BoardPart } from "@t3tools/contracts";
+import type { BoardEdit, BoardEditResult, BoardNet, BoardPart } from "@t3tools/contracts";
 import { buildBoardScene } from "@t3tools/shared/kicad/boardScene";
 import { sameNet } from "@t3tools/shared/kicad/pick";
 import { ratsnest } from "@t3tools/shared/kicad/ratsnest";
@@ -16,7 +16,10 @@ export interface BoardEditReport {
   readonly parts: ReadonlyArray<BoardPart>;
   /** Pairs of parts on the same side whose bodies overlap. */
   readonly overlaps: ReadonlyArray<readonly [string, string]>;
+  readonly keepouts: ReadonlyArray<BoardKeepout>;
 }
+
+type BoardKeepout = BoardEditResult["keepouts"][number];
 
 const round = (value: number) => Math.round(value * 1000) / 1000;
 const centre = (box: Box): Point => ({
@@ -105,6 +108,7 @@ export function parseBoardReport(
       outline?: BoardEditReport["outline"] | null;
       parts?: ReadonlyArray<BoardPart>;
       overlaps?: ReadonlyArray<readonly [string, string]>;
+      keepouts?: ReadonlyArray<BoardKeepout>;
     };
     if (typeof report.error === "string") return { error: report.error };
     return {
@@ -112,6 +116,7 @@ export function parseBoardReport(
       ...(report.outline ? { outline: report.outline } : {}),
       parts: (report.parts ?? []).toSorted((a, b) => naturally(a.reference, b.reference)),
       overlaps: report.overlaps ?? [],
+      keepouts: report.keepouts ?? [],
     };
   } catch {
     return undefined;
@@ -197,9 +202,16 @@ def net_for(name, spots, layer):
                 return pad.GetNet()
     return None
 
-def blocked(shape, layers, net):
-    """What copper of another net the shape would touch, or None."""
+def keepouts():
+    return [zone for zone in board.Zones() if zone.GetIsRuleArea()]
+
+def blocked(shape, layers, net, via=False):
+    """What the shape would touch that it may not: a keep-out area or copper of another net."""
     gap = settings.m_NetSettings.GetEffectiveNetClass(net.GetNetname()).GetClearance()
+    for zone in keepouts():
+        barred = zone.GetDoNotAllowVias() if via else zone.GetDoNotAllowTracks()
+        if barred and any(zone.IsOnLayer(layer) for layer in layers) and zone.Outline().Collide(shape, 0):
+            return "the keep-out area %s" % (zone.GetZoneName() or "there")
     for layer in layers:
         for fp in board.GetFootprints():
             for pad in fp.Pads():
@@ -253,6 +265,46 @@ for edit in job["edits"]:
         board.Add(shape)
         summary.append("Set the board outline to %s x %s mm at (%s, %s)" % (
             number(edit["width"]), number(edit["height"]), number(edit["x"]), number(edit["y"])))
+    elif op == "keepout":
+        if edit["width"] <= 0 or edit["height"] <= 0 or not edit["name"].strip():
+            fail("A keep-out area needs a name and a width and height above zero.")
+        for zone in keepouts():
+            if zone.GetZoneName() == edit["name"]:
+                board.Remove(zone)
+                removed.append(zone)
+        zone = pcbnew.ZONE(board)
+        zone.SetIsRuleArea(True)
+        zone.SetZoneName(edit["name"])
+        layers = pcbnew.LSET()
+        for layer in copper_layers:
+            layers.AddLayer(layer)
+        zone.SetLayerSet(layers)
+        zone.SetDoNotAllowTracks(True)
+        zone.SetDoNotAllowVias(True)
+        zone.SetDoNotAllowZoneFills(True)
+        zone.SetDoNotAllowPads(False)
+        zone.SetDoNotAllowFootprints(False)
+        outline = zone.Outline()
+        outline.NewOutline()
+        for x, y in ((0, 0), (1, 0), (1, 1), (0, 1)):
+            outline.Append(mm(edit["x"] + x * edit["width"]), mm(edit["y"] + y * edit["height"]))
+        for fp in board.GetFootprints():
+            for pad in fp.Pads():
+                if pad.GetNetCode() > 0 and any(
+                        pad.IsOnLayer(layer) and outline.Collide(pad.GetEffectiveShape(layer), 0)
+                        for layer in copper_layers):
+                    fail("That area covers %s, which then could not be reached. Keep it clear of pads." % pad_name(pad))
+        board.Add(zone)
+        summary.append("Kept copper out of %s: %s x %s mm at (%s, %s)" % (
+            edit["name"], number(edit["width"]), number(edit["height"]), number(edit["x"]), number(edit["y"])))
+    elif op == "remove_keepout":
+        found = [zone for zone in keepouts() if zone.GetZoneName() == edit["name"]]
+        if not found:
+            fail("The board has no keep-out area called %s." % edit["name"])
+        for zone in found:
+            board.Remove(zone)
+            removed.append(zone)
+        summary.append("Removed the keep-out area %s" % edit["name"])
     elif op == "track":
         layer = copper_layer(edit.get("layer", "F.Cu"))
         spots = [spot_of(point) for point in edit["points"]]
@@ -285,8 +337,9 @@ for edit in job["edits"]:
             track.SetNet(net)
             hit = blocked(track.GetEffectiveShape(), [layer], net)
             if hit:
-                fail("The track from %s to %s on %s would touch %s. Go around it or use the other side." % (
-                    where(start), where(end), board.GetLayerName(layer), hit))
+                fail("The track from %s to %s on %s would touch %s. %s" % (
+                    where(start), where(end), board.GetLayerName(layer), hit,
+                    "Go around it." if hit.startswith("the keep-out") else "Go around it or use the other side."))
             board.Add(track)
             count += 1
             length += track.GetLength()
@@ -307,7 +360,7 @@ for edit in job["edits"]:
         via.SetWidth(pcbnew.F_Cu, rules.GetViaDiameter())
         via.SetDrill(rules.GetViaDrill())
         via.SetNet(net)
-        hit = blocked(via.GetEffectiveShape(pcbnew.F_Cu), copper_layers, net)
+        hit = blocked(via.GetEffectiveShape(pcbnew.F_Cu), copper_layers, net, True)
         if hit:
             fail("A via at %s would touch %s." % (where(spot[0]), hit))
         board.Add(via)
@@ -373,5 +426,12 @@ for index, (ref, flipped, box) in enumerate(boxes):
         if flipped == other_flipped and box.Intersects(other_box):
             overlaps.append([ref, other])
 
-print("KITTY_BOARD " + json.dumps({"summary": summary, "outline": outline, "parts": parts, "overlaps": overlaps[:40]}))
+areas = []
+for zone in keepouts():
+    box = zone.GetBoundingBox()
+    areas.append({"name": zone.GetZoneName(), "x": to_mm(box.GetLeft()), "y": to_mm(box.GetTop()),
+                  "width": to_mm(box.GetWidth()), "height": to_mm(box.GetHeight())})
+
+print("KITTY_BOARD " + json.dumps({
+    "summary": summary, "outline": outline, "parts": parts, "overlaps": overlaps[:40], "keepouts": areas}))
 `;

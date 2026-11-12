@@ -539,6 +539,7 @@ export const make = Effect.fn("KicadService.make")(function* () {
       ...(report.outline ? { outline: report.outline } : {}),
       parts: [...report.parts],
       overlaps: report.overlaps.map(([a, b]) => [a, b] as const),
+      keepouts: [...report.keepouts],
       toRoute: [...routing.toRoute],
       unrouted: routing.unrouted,
       ...(input.nets ? { nets: [...routing.nets] } : {}),

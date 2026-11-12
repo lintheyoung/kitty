@@ -246,6 +246,22 @@ export const BoardEdit = Schema.Union([
     height: Schema.Number,
   }).annotate({ description: "Make the board a rectangle; replaces the outline it has." }),
   Schema.Struct({
+    op: Schema.Literal("keepout"),
+    name: Schema.String.annotate({
+      description: "What the area is for, e.g. 'U2 antenna'; reusing a name replaces that area.",
+    }),
+    x: Schema.Number,
+    y: Schema.Number,
+    width: Schema.Number,
+    height: Schema.Number,
+  }).annotate({
+    description: "A rectangle where no track, via or copper fill may go, on every copper layer.",
+  }),
+  Schema.Struct({
+    op: Schema.Literal("remove_keepout"),
+    name: Schema.String,
+  }),
+  Schema.Struct({
     op: Schema.Literal("track"),
     points: Schema.Array(BoardSpot).annotate({
       description: "The corners of the track in order, at least two; pads by name or points.",
@@ -351,6 +367,16 @@ export const BoardEditResult = Schema.Struct({
   parts: Schema.Array(BoardPart),
   /** Pairs of parts on the same side whose bodies overlap. */
   overlaps: Schema.Array(Schema.Tuple([Schema.String, Schema.String])),
+  /** Areas where tracks and vias may not go. */
+  keepouts: Schema.Array(
+    Schema.Struct({
+      name: Schema.String,
+      x: Schema.Number,
+      y: Schema.Number,
+      width: Schema.Number,
+      height: Schema.Number,
+    }),
+  ),
   /** Pairs of pads still to be joined by a track, nearest first within each net. */
   toRoute: Schema.Array(
     Schema.Struct({ net: Schema.String, from: Schema.String, to: Schema.String }),
