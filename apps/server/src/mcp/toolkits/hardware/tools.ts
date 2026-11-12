@@ -47,6 +47,8 @@ import {
   BoardEditResult,
   BoardAutorouteInput,
   BoardAutorouteResult,
+  BoardPourInput,
+  BoardSilkscreenInput,
   BoardSyncInput,
   BoardSyncResult,
   KicadDrcInput,
@@ -274,7 +276,7 @@ const BoardSyncTool = Tool.make("pcb_sync", {
 
 const BoardEditTool = Tool.make("pcb_edit", {
   description:
-    "Everything on the board: place parts, set the outline, route, pour copper and do the silkscreen. `outline` makes the board a rectangle (x, y, width, height in mm). `move` puts a part at a point, slides it `by` an offset, turns it (`rotation`, `rotateBy`) or puts it on the `back`. `track` draws copper through `points`, each a pad ({pad: 'U1.3'}) or a point, on `layer` F.Cu or B.Cu; `via` joins the two sides at a point; `unroute` removes a net's tracks or the ones in `ids`. `keepout` bars tracks, vias and copper fill from a named rectangle: put one under the antenna of every radio module (the end of the module that has no pads) before routing. `pour` fills the free copper of the whole board (or a rectangle) with a net, normally GND on every layer, joined to that net's pads through thermal spokes; pours are refilled after every edit and the reply's `pours` gives the copper each got. `text` prints on the silkscreen (board name, version, pin labels); `label` moves, turns or hides one part's reference and `tidy_labels` puts every reference beside its part, clear of pads. A track or via that would touch another net is refused with what it hit: go around, or change sides with a via. Edits apply all or none. The reply lists every part with its position, size as it lies, block and whether it is inside the outline, the pairs of parts that overlap (fix those before routing), and `toRoute`: the pad pairs still to join. Pass `nets` to get the pad positions, tracks and vias of those nets before routing them. Call it with no edits to read the board. Keep the parts of a block together, connectors at the edges, decoupling capacitors beside their chip.",
+    "Place parts on the board, set its outline and route it. `outline` makes the board a rectangle (x, y, width, height in mm). `move` puts a part at a point, slides it `by` an offset, turns it (`rotation`, `rotateBy`) or puts it on the `back`. `track` draws copper through `points`, each a pad ({pad: 'U1.3'}) or a point, on `layer` F.Cu or B.Cu; `via` joins the two sides at a point; `unroute` removes a net's tracks or the ones in `ids`. `keepout` bars tracks, vias and copper fill from a named rectangle: put one under the antenna of every radio module (the end of the module that has no pads) before routing. Copper pours and the silkscreen have their own tools, `pcb_pour` and `pcb_silkscreen`; pours are refilled after every edit here. A track or via that would touch another net is refused with what it hit: go around, or change sides with a via. Edits apply all or none. The reply lists every part with its position, size as it lies, block and whether it is inside the outline, the pairs of parts that overlap (fix those before routing), and `toRoute`: the pad pairs still to join. Pass `nets` to get the pad positions, tracks and vias of those nets before routing them. Call it with no edits to read the board. Keep the parts of a block together, connectors at the edges, decoupling capacitors beside their chip.",
   parameters: BoardEditInput,
   success: BoardEditResult,
   failure: HardwareFailure,
@@ -294,6 +296,32 @@ const BoardAutorouteTool = Tool.make("pcb_autoroute", {
   dependencies: kicadDependencies,
 })
   .annotate(Tool.Title, "Auto-route board")
+  .annotate(Tool.Destructive, false)
+  .annotate(Tool.Idempotent, false)
+  .annotate(Tool.OpenWorld, false);
+
+const BoardPourTool = Tool.make("pcb_pour", {
+  description:
+    "Copper pour (ground plane, zone fill): fill the free copper of the board with a net, normally GND on every copper layer. Pads of the net join it through thermal spokes, pours on several layers are stitched together with vias, keep-out areas stay clear, and every later board edit refills it. Replaces that net's pour on those layers; `remove` takes it off. The reply's `pours` gives the copper each layer got and `toRoute` what is still unconnected. Do this in Kitty, not in KiCad.",
+  parameters: BoardPourInput,
+  success: BoardEditResult,
+  failure: HardwareFailure,
+  dependencies: kicadDependencies,
+})
+  .annotate(Tool.Title, "Pour copper")
+  .annotate(Tool.Destructive, false)
+  .annotate(Tool.Idempotent, true)
+  .annotate(Tool.OpenWorld, false);
+
+const BoardSilkscreenTool = Tool.make("pcb_silkscreen", {
+  description:
+    "Silkscreen: `tidy` puts every part's reference (R1, U2) beside its part at one readable size, which clears the silk_overlap and silk_over_copper warnings of `kicad_drc`; `labels` moves, turns or hides single references; `texts` prints a board name, version or pin labels; `removeTexts` takes texts off by id. The reply's `texts` lists the free texts. Do this in Kitty, not in KiCad.",
+  parameters: BoardSilkscreenInput,
+  success: BoardEditResult,
+  failure: HardwareFailure,
+  dependencies: kicadDependencies,
+})
+  .annotate(Tool.Title, "Edit silkscreen")
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, false)
   .annotate(Tool.OpenWorld, false);
@@ -500,6 +528,8 @@ export const HardwareToolkit = Toolkit.make(
   BoardSyncTool,
   BoardAutorouteTool,
   BoardEditTool,
+  BoardPourTool,
+  BoardSilkscreenTool,
   KicadNetlistTool,
   KicadBomTool,
   KicadFabExportTool,

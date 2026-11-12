@@ -16,6 +16,8 @@ const PAGE_OF_TOOL: Readonly<Record<string, DesignPage>> = {
   pcb_sync: "board",
   pcb_edit: "board",
   pcb_autoroute: "board",
+  pcb_pour: "board",
+  pcb_silkscreen: "board",
   kicad_drc: "board",
   kicad_fab_export: "board",
 };

@@ -131,6 +131,32 @@ export const layer = McpToolAccess.toLayer(HardwareToolkit, {
       return yield* kicad.boardAutoroute({ ...input, workspaceRoot: yield* callerWorkspaceRoot() });
     }),
   ),
+  pcb_pour: McpToolAccess.actsAsCaller((input) =>
+    Effect.gen(function* () {
+      const kicad = yield* KicadService.KicadService;
+      const { path, remove, area, ...pour } = input;
+      return yield* kicad.boardEdit({
+        path,
+        edits: [remove ? { op: "remove_pour", ...pour } : { op: "pour", ...pour, ...area }],
+        workspaceRoot: yield* callerWorkspaceRoot(),
+      });
+    }),
+  ),
+  pcb_silkscreen: McpToolAccess.actsAsCaller((input) =>
+    Effect.gen(function* () {
+      const kicad = yield* KicadService.KicadService;
+      return yield* kicad.boardEdit({
+        path: input.path,
+        edits: [
+          ...(input.removeTexts ?? []).map((id) => ({ op: "remove_text" as const, id })),
+          ...(input.tidy ? [{ op: "tidy_labels" as const }] : []),
+          ...(input.labels ?? []).map((label) => ({ op: "label" as const, ...label })),
+          ...(input.texts ?? []).map((text) => ({ op: "text" as const, ...text })),
+        ],
+        workspaceRoot: yield* callerWorkspaceRoot(),
+      });
+    }),
+  ),
   pcb_edit: McpToolAccess.actsAsCaller((input) =>
     Effect.gen(function* () {
       const kicad = yield* KicadService.KicadService;

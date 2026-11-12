@@ -457,6 +457,70 @@ export const BoardEditResult = Schema.Struct({
 });
 export type BoardEditResult = typeof BoardEditResult.Type;
 
+const BoardDesignPath = Schema.String.annotate({
+  description: "The design: its .kicad_pcb, .kicad_pro or directory, relative to the workspace.",
+});
+
+export const BoardPourInput = Schema.Struct({
+  path: BoardDesignPath,
+  net: Schema.String.annotate({ description: "The net to fill with, usually GND." }),
+  layers: Schema.optional(
+    Schema.Array(Schema.String).annotate({
+      description: "Copper layers, e.g. F.Cu and B.Cu; every copper layer when absent.",
+    }),
+  ),
+  area: Schema.optional(
+    Schema.Struct({
+      x: Schema.Number,
+      y: Schema.Number,
+      width: Schema.Number,
+      height: Schema.Number,
+    }).annotate({ description: "A rectangle in millimetres; the whole board when absent." }),
+  ),
+  remove: Schema.optional(
+    Schema.Boolean.annotate({ description: "Take the net's pour off those layers instead." }),
+  ),
+});
+export type BoardPourInput = typeof BoardPourInput.Type;
+
+export const BoardSilkscreenInput = Schema.Struct({
+  path: BoardDesignPath,
+  tidy: Schema.optional(
+    Schema.Boolean.annotate({
+      description:
+        "Put every part's reference beside its part at one readable size, clear of pads and of each other.",
+    }),
+  ),
+  labels: Schema.optional(
+    Schema.Array(
+      Schema.Struct({
+        reference: Schema.String,
+        at: Schema.optional(BoardPoint),
+        rotation: Schema.optional(Schema.Number),
+        hidden: Schema.optional(Schema.Boolean),
+      }),
+    ).annotate({ description: "Move, turn, hide or show single references, after tidying." }),
+  ),
+  texts: Schema.optional(
+    Schema.Array(
+      Schema.Struct({
+        text: Schema.String,
+        x: Schema.Number,
+        y: Schema.Number,
+        side: Schema.optional(Schema.Literals(["front", "back"])),
+        size: Schema.optional(
+          Schema.Number.annotate({ description: "Letter height in millimetres; 1 when absent." }),
+        ),
+        rotation: Schema.optional(Schema.Number),
+      }),
+    ).annotate({ description: "Texts to print, each centred on its point." }),
+  ),
+  removeTexts: Schema.optional(
+    Schema.Array(Schema.String).annotate({ description: "Ids of texts from a reply's `texts`." }),
+  ),
+});
+export type BoardSilkscreenInput = typeof BoardSilkscreenInput.Type;
+
 export const BoardAutorouteInput = Schema.Struct({
   path: Schema.String.annotate({
     description: "The design: its .kicad_pcb, .kicad_pro or directory, relative to the workspace.",
