@@ -257,6 +257,8 @@ for edit in job["edits"]:
         for drawing in list(board.GetDrawings()):
             if drawing.GetLayer() == pcbnew.Edge_Cuts:
                 board.Remove(drawing)
+                # Kept until the end like removed tracks: freeing it mid-run breaks KiCad's Python types.
+                removed.append(drawing)
         shape = pcbnew.PCB_SHAPE(board, pcbnew.SHAPE_T_RECT)
         shape.SetStart(pcbnew.VECTOR2I(mm(edit["x"]), mm(edit["y"])))
         shape.SetEnd(pcbnew.VECTOR2I(mm(edit["x"] + edit["width"]), mm(edit["y"] + edit["height"])))

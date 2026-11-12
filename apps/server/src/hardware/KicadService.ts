@@ -459,6 +459,16 @@ export const make = Effect.fn("KicadService.make")(function* () {
   const boardUntouched = (output: string) =>
     `KiCad could not change the board, so it was left as it was.\n${logTail(output, 8)}`;
 
+  // KiCad's Python can segfault while it tears down after the script is done, which
+  // macOS reports as a crash dialog. Leaving straight after the output skips that.
+  const KICAD_PYTHON_PRELUDE = `import atexit, os, sys
+def _kitty_leave():
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(0)
+atexit.register(_kitty_leave)
+`;
+
   /**
    * Runs a script with KiCad's own Python, which writes boards exactly as KiCad
    * saves them. Resolves to what the script printed.
@@ -477,7 +487,7 @@ export const make = Effect.fn("KicadService.make")(function* () {
         const temp = yield* io(fs.makeTempDirectoryScoped({ prefix: "kitty-pcb-" }));
         const script = path.join(temp, "script.py");
         const jobFile = path.join(temp, "job.json");
-        yield* io(fs.writeFileString(script, source));
+        yield* io(fs.writeFileString(script, KICAD_PYTHON_PRELUDE + source));
         yield* io(fs.writeFileString(jobFile, job));
         for (const python of kicadPythonCandidates(env, cli)) {
           const run = yield* processRunner
