@@ -1503,7 +1503,7 @@ function tidy(session: Session, placed: Array<PlacedPart>): ReadonlyArray<string
   // Every way to deal the blocks into rows, with as many rows as can be tried in good time.
   const most = [6, 5, 4, 3, 2].find((rows) => rows ** order.length <= 60000) ?? 1;
   const deals: Array<ReadonlyArray<number>> = [[]];
-  for (let dealt = 0; dealt < order.length && most > 1; dealt++) {
+  for (let dealt = 0; dealt < (most > 1 ? order.length : 0); dealt++) {
     const longer = deals.flatMap((deal) =>
       Array.from({ length: most }, (_, row) => [...deal, row]),
     );
