@@ -198,7 +198,15 @@ export const layer = McpToolAccess.toLayer(HardwareToolkit, {
   sch_edit: McpToolAccess.actsAsCaller((input) =>
     Effect.gen(function* () {
       const kicad = yield* KicadService.KicadService;
-      return yield* kicad.schematicEdit({ ...input, workspaceRoot: yield* callerWorkspaceRoot() });
+      const request = { ...input, workspaceRoot: yield* callerWorkspaceRoot() };
+      const adds = input.edits.some((edit) => edit.op === "place");
+      if (!adds || input.edits.some((edit) => edit.op === "tidy")) {
+        return yield* kicad.schematicEdit(request);
+      }
+      // New parts land in a tidy sheet; the edit still goes through if tidying cannot.
+      return yield* kicad
+        .schematicEdit({ ...request, edits: [...input.edits, { op: "tidy" }] })
+        .pipe(Effect.catch(() => kicad.schematicEdit(request)));
     }),
   ),
   sch_tidy: McpToolAccess.actsAsCaller((input) =>

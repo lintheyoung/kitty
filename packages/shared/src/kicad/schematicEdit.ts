@@ -1122,6 +1122,13 @@ function ladder(session: Session, links: ReadonlyArray<Link>): Piece {
       const reach = wired.filter((pin) => pin.out.x === side).map((pin) => pin.at.x * side);
       return reach.length > 0 ? side * (Math.max(...reach) + LEAD) : undefined;
     };
+    // The reference and value as written on this part, which can be longer than the library's.
+    const written = all(link.member.library, "property").flatMap((property) => {
+      const shown = propertyOf(link.member.part, text(property[1]));
+      if (!shown || text(find(property, "hide")?.[1]) === "yes") return [];
+      const at = orient(positionOf(property), rotation, mirror);
+      return [[at.x, (text(shown[2]).length * TEXT) / 2] as const];
+    });
     return {
       link,
       rotation,
@@ -1133,8 +1140,8 @@ function ladder(session: Session, links: ReadonlyArray<Link>): Piece {
       // Where the part begins and ends between its lines.
       head: upper ? Math.min(body?.minY ?? Infinity, ...tips(-1)) : box.minY,
       foot: lower ? Math.max(body?.maxY ?? -Infinity, ...tips(1)) : box.maxY,
-      minX: Math.min(box.minX, trunk(-1) ?? 0),
-      maxX: Math.max(box.maxX, trunk(1) ?? 0),
+      minX: Math.min(box.minX, trunk(-1) ?? 0, ...written.map(([at, reach]) => at - reach)),
+      maxX: Math.max(box.maxX, trunk(1) ?? 0, ...written.map(([at, reach]) => at + reach)),
       trunk,
       netOf,
       wired,
