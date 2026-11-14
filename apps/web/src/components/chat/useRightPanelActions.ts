@@ -161,20 +161,17 @@ export function useRightPanelActions(input: RightPanelActionsInput) {
     useRightPanelStore.getState().open(activeThreadRef, "device");
   };
   const addDeviceSurfaceStable = useStableCallback(addDeviceSurface);
-  // The header's Hardware and Designer buttons are switches: pressing the one showing hides it.
-  const showing = (kind: "hardware" | "designer") =>
-    rightPanelOpen && activeRightPanelSurface?.kind === kind;
-  const addHardwareSurface = () => {
+  // Designer and Hardware are two pages of one workbench, so opening either brings both tabs.
+  const openWorkbench = (page: "designer" | "hardware") => {
     if (!activeThreadRef) return;
-    if (showing("hardware")) useRightPanelStore.getState().close(activeThreadRef);
-    else useRightPanelStore.getState().open(activeThreadRef, "hardware");
+    const store = useRightPanelStore.getState();
+    store.open(activeThreadRef, "designer");
+    store.open(activeThreadRef, "hardware");
+    if (page === "designer") store.open(activeThreadRef, "designer");
   };
+  const addHardwareSurface = () => openWorkbench("hardware");
   const addHardwareSurfaceStable = useStableCallback(addHardwareSurface);
-  const addDesignerSurface = () => {
-    if (!activeThreadRef) return;
-    if (showing("designer")) useRightPanelStore.getState().close(activeThreadRef);
-    else useRightPanelStore.getState().open(activeThreadRef, "designer");
-  };
+  const addDesignerSurface = () => openWorkbench("designer");
   const addDesignerSurfaceStable = useStableCallback(addDesignerSurface);
   const openFileSurface = (relativePath: string) => {
     if (!activeThreadRef || !activeProject) return;

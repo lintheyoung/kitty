@@ -1077,13 +1077,16 @@ export default function ChatView(props: ChatViewProps) {
   const rightPanelControlsAtRoot = rightPanelPresent && !shouldUsePlanSidebarSheet;
   const renderedRightPanelSurface = rightPanelPresence.value?.activeSurface ?? null;
   const renderedRightPanelSurfaces = rightPanelPresence.value?.surfaces ?? [];
-  // Design mode: the board designer fills the left of the row, the chat sits on the right.
+  const workbenchShowing =
+    rightPanelOpen &&
+    (renderedRightPanelSurface?.kind === "designer" ||
+      renderedRightPanelSurface?.kind === "hardware");
+  // Design mode: the workbench (Designer or Hardware) fills the left, the chat sits on the right.
   const designMode =
     !embedded &&
-    rightPanelOpen &&
+    workbenchShowing &&
     !shouldUsePlanSidebarSheet &&
-    rightPanelState.maximized !== true &&
-    renderedRightPanelSurface?.kind === "designer";
+    rightPanelState.maximized !== true;
   const previewMiniPlayerVisible = shouldRenderPreviewMiniPlayer(
     activePreviewMiniPlayer?.source ?? null,
     renderedRightPanelSurface,
@@ -3358,15 +3361,9 @@ export default function ChatView(props: ChatViewProps) {
                 ? { onOpenProjectSettings: handleOpenDraftProjectSettingsStable }
                 : {})}
               {...(threadFindEnabled ? { onFindInThread: openThreadFindStable } : {})}
-              {...(activeProject && !activeProject.isScratch
+              {...(activeProject && !activeProject.isScratch && !workbenchShowing
                 ? {
-                    onOpenHardware: addHardwareSurfaceStable,
-                    onOpenDesigner: addDesignerSurfaceStable,
-                    ...(rightPanelOpen &&
-                    (renderedRightPanelSurface?.kind === "hardware" ||
-                      renderedRightPanelSurface?.kind === "designer")
-                      ? { activeWorkbench: renderedRightPanelSurface.kind }
-                      : {}),
+                    onOpenWorkbench: addDesignerSurfaceStable,
                   }
                 : {})}
             />
