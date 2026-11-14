@@ -213,16 +213,15 @@ export class KicadService extends Context.Service<
       input: InWorkspace<BoardEditInput> & { readonly by?: SchematicChangeAuthor },
     ) => Effect.Effect<BoardEditResult, HardwareToolError>;
     /** Brings the schematic's parts and nets onto the board. */
-    /** Runs a tool of the PCB engine (Copper) on a design. */
-    readonly boardEngine: (input: {
+    /** Runs a Copper tool on a design, from its schematic to its board. */
+    readonly designEngine: (input: {
       readonly workspaceRoot: string;
       readonly path: string;
       readonly tool: string;
       readonly arguments: Readonly<Record<string, unknown>>;
-      readonly writes: boolean;
       readonly by?: SchematicChangeAuthor;
     }) => Effect.Effect<
-      { readonly board: string; readonly summary: string; readonly report: string },
+      { readonly design: string; readonly summary: string; readonly report: string },
       HardwareToolError
     >;
     readonly boardAutoroute: (
@@ -710,24 +709,43 @@ atexit.register(_kitty_leave)
     return yield* failure("toolchain_missing", ENGINE_MISSING);
   });
 
-  /** Runs one tool of the PCB engine on a design; `writes` records the change for undo. */
-  const boardEngine = Effect.fn("KicadService.boardEngine")(function* (input: {
+  /** Runs one Copper tool on a design; what it changes goes into the undo history and the log. */
+  const designEngine = Effect.fn("KicadService.designEngine")(function* (input: {
     readonly workspaceRoot: string;
     readonly path: string;
     readonly tool: string;
     readonly arguments: Readonly<Record<string, unknown>>;
-    readonly writes: boolean;
     readonly by?: SchematicChangeAuthor;
   }) {
-    const { file, relative } = yield* resolveDesign(input.workspaceRoot, input.path, ".kicad_pcb");
-    const directory = path.dirname(file);
-    const project = file.replace(/\.kicad_pcb$/, ".kicad_pro");
     const engine = yield* findEngine();
     const home = yield* HostProcess.HomeDirectory;
-    const readBoard = fs
-      .readFileString(file)
-      .pipe(Effect.mapError((cause) => failure("invalid_path", cause.message)));
-    const before = yield* readBoard;
+    // The design is named by `path` alone, so the engine cannot be pointed outside the workspace.
+    const { project: _project, ...given } = input.arguments;
+    const creating = input.tool === "project_create";
+    let project = "";
+    let directory: string;
+    let args: Readonly<Record<string, unknown>> = given;
+    if (creating) {
+      directory = yield* confine(input.workspaceRoot, input.path);
+      yield* fs
+        .makeDirectory(directory, { recursive: true })
+        .pipe(Effect.mapError((cause) => failure("invalid_path", cause.message)));
+      args = { ...given, path: directory };
+    } else {
+      const design = yield* resolveDesign(input.workspaceRoot, input.path, ".kicad_sch").pipe(
+        Effect.catch(() => resolveDesign(input.workspaceRoot, input.path, ".kicad_pcb")),
+      );
+      project = design.file.replace(/\.kicad_(sch|pcb)$/, ".kicad_pro");
+      directory = path.dirname(design.file);
+    }
+    const files = creating
+      ? []
+      : [
+          project.replace(/\.kicad_pro$/, ".kicad_sch"),
+          project.replace(/\.kicad_pro$/, ".kicad_pcb"),
+        ];
+    const read = (file: string) => fs.readFileString(file).pipe(Effect.option);
+    const before = yield* Effect.forEach(files, read);
     const run = yield* Effect.scoped(
       Effect.gen(function* () {
         const temp = yield* fs.makeTempDirectoryScoped({ prefix: "kitty-engine-" });
@@ -735,14 +753,7 @@ atexit.register(_kitty_leave)
         yield* fs.writeFileString(runner, ENGINE_RUNNER);
         return yield* processRunner.run({
           command: engine.python,
-          args: [
-            "-I",
-            runner,
-            engine.source,
-            project,
-            input.tool,
-            engineArguments(input.arguments),
-          ],
+          args: ["-I", runner, engine.source, project, input.tool, engineArguments(args)],
           cwd: directory,
           env: { COPPER_HOME: path.join(home, COPPER_HOME_FOLDER) },
           timeout: "12 minutes",
@@ -755,21 +766,29 @@ atexit.register(_kitty_leave)
     if (!reply) {
       return yield* failure(
         "command_failed",
-        `The PCB engine gave no answer.\n${logTail(`${run.stdout}\n${run.stderr}`, 8)}`,
+        `Copper gave no answer.\n${logTail(`${run.stdout}\n${run.stderr}`, 8)}`,
       );
     }
     if ("error" in reply) return yield* failure("invalid_argument", reply.error);
-    const after = input.writes ? yield* readBoard : before;
-    if (after !== before) {
-      const summary = [reply.summary];
-      const history = historyOf(file, before);
-      history.undo.push({ source: before, summary });
+    const after = yield* Effect.forEach(files, read);
+    let changed = false;
+    for (const [index, file] of files.entries()) {
+      const was = Option.getOrUndefined(before[index] ?? Option.none<string>());
+      const now = Option.getOrUndefined(after[index] ?? Option.none<string>());
+      if (was === undefined || now === undefined || was === now) continue;
+      const history = historyOf(file, was);
+      history.undo.push({ source: was, summary: [reply.summary] });
       if (history.undo.length > HISTORY_LIMIT) history.undo.shift();
       history.redo.length = 0;
-      history.current = after;
-      yield* recordChange(directory, input.by ?? "agent", summary);
+      history.current = now;
+      changed = true;
     }
-    return { board: relative, summary: reply.summary, report: reply.report };
+    if (changed) yield* recordChange(directory, input.by ?? "agent", [reply.summary]);
+    return {
+      design: path.relative(input.workspaceRoot, creating ? directory : project),
+      summary: reply.summary,
+      report: reply.report,
+    };
   });
 
   const boardAutoroute = Effect.fn("KicadService.boardAutoroute")(function* (
@@ -2062,7 +2081,7 @@ atexit.register(_kitty_leave)
     schematicHistory,
     schematicReview,
     boardAutoroute,
-    boardEngine,
+    designEngine,
     boardSync,
     boardEdit,
     seatLibraryModels,

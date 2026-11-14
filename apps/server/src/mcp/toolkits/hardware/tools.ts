@@ -33,36 +33,10 @@ import {
   HardwarePinmapSyncResult,
   HardwareProjectInspectInput,
   HardwareProjectInspectResult,
-  JlcImportedPart,
-  JlcPartImportInput,
-  JlcPartSearchInput,
-  JlcPartSearchResult,
-  KicadBomInput,
   SchematicChangesInput,
   SchematicChangesResult,
-  SchematicEditInput,
-  SchematicEditResult,
-  SchematicTidyInput,
-  KicadBomResult,
-  BoardEditInput,
-  BoardEditResult,
-  BoardAutorouteInput,
-  BoardAutorouteResult,
-  BoardEngineResult,
-  BoardReadInput,
-  BoardReviewInput,
-  BoardRouteInput,
-  BoardRoutePlanInput,
-  BoardPourInput,
-  BoardSilkscreenInput,
-  BoardSyncInput,
-  BoardSyncResult,
-  KicadDrcInput,
-  KicadDrcResult,
-  KicadErcInput,
-  KicadErcResult,
-  KicadFabExportInput,
-  KicadFabExportResult,
+  DesignEngineInput,
+  DesignEngineResult,
   KicadNetlistInput,
   KicadNetlistResult,
   OrchestratorMcpFailure,
@@ -74,7 +48,6 @@ import * as Schema from "effect/Schema";
 import { Tool, Toolkit } from "effect/ai";
 
 import * as HardwareService from "../../../hardware/HardwareService.ts";
-import * as JlcPartsService from "../../../hardware/JlcPartsService.ts";
 import * as KicadService from "../../../hardware/KicadService.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as ProjectService from "../../../project/ProjectService.ts";
@@ -91,7 +64,6 @@ const kicadDependencies = [
   ProjectService.ProjectService,
   Path.Path,
 ];
-const jlcDependencies = [...kicadDependencies, JlcPartsService.JlcPartsService];
 const HardwareFailure = Schema.Union([HardwareToolError, OrchestratorMcpFailure]);
 
 const HardwareDoctorTool = Tool.make("hw_doctor", {
@@ -239,153 +211,18 @@ const HardwareFlashTool = Tool.make("hw_flash", {
   .annotate(Tool.Idempotent, false)
   .annotate(Tool.OpenWorld, false);
 
-const KicadErcTool = Tool.make("kicad_erc", {
+const DesignEngineTool = Tool.make("copper", {
   description:
-    "Run KiCad's electrical rules check on a schematic. Returns counts per check and the violations (errors first, max 100) with the symbol, pin and position involved.",
-  parameters: KicadErcInput,
-  success: KicadErcResult,
+    "Design the board with Copper, the KiCad engine Kitty uses from the schematic to the fab files: copper(path, tool, arguments). First read the worked examples of a tool with tool `copper_help`, arguments {tool: 'sch_apply'}. The loop: plan the blocks; draw the whole schematic in one `sch_apply` batch (place parts by `lcsc` number or `spec`, connect pins by name to net names, never by coordinates); fix what its ERC lists; `board_build` with the board's width and height (sync, outline, placement, routing, ground pour and DRC in one call); fix what its report lists with `pcb_place`, `pcb_route_guided` and `pcb_edit`; `verify`; `fab_export`. Tools: copper_status, project_create, project_summary, checkpoint, sch_apply, sch_read, sch_tidy, library, parts_search, parts_get, parts_import, parts_source_bom, parts_alternatives, verify, design_review, render, pcb_read, pcb_sync, pcb_setup, pcb_place, pcb_route, pcb_pour, pcb_edit, pcb_route_plan, pcb_route_guided, fab_export, export, board_build. Every result carries KiCad's ERC and DRC counts and a `fix` for each finding: trust those, not what you assume. Pictures are saved under copper-out/ in the design folder; read the file to look. On the board: when auto placement cannot seat a part (a radio module on a small board), put it by hand with `pcb_place` moves and lock it, antenna end on a board edge, and keep copper out beside the antenna as well as under it; place decoupling at the pins it serves; route what matters first (USB pairs, crystals, supply) by a plan; when nets block each other change the order or rip those nets up; when a corner will not route, move parts or swap interchangeable pins rather than add vias. A clean DRC is not the end: read `pcb_read` with what ['elegance'] and fix its worst points. A footprint whose own holes break the fab rules needs another footprint, not a waiver.",
+  parameters: DesignEngineInput,
+  success: DesignEngineResult,
   failure: HardwareFailure,
   dependencies: kicadDependencies,
 })
-  .annotate(Tool.Title, "Check schematic (ERC)")
-  .annotate(Tool.Readonly, true)
-  .annotate(Tool.Destructive, false)
-  .annotate(Tool.Idempotent, true)
-  .annotate(Tool.OpenWorld, false);
-
-const KicadDrcTool = Tool.make("kicad_drc", {
-  description:
-    "Run KiCad's design rules check on a board, by default also against the schematic. Returns counts per check, violations (errors first, max 100), unconnected items and board/schematic mismatches.",
-  parameters: KicadDrcInput,
-  success: KicadDrcResult,
-  failure: HardwareFailure,
-  dependencies: kicadDependencies,
-})
-  .annotate(Tool.Title, "Check board (DRC)")
-  .annotate(Tool.Readonly, true)
-  .annotate(Tool.Destructive, false)
-  .annotate(Tool.Idempotent, true)
-  .annotate(Tool.OpenWorld, false);
-
-const BoardSyncTool = Tool.make("pcb_sync", {
-  description:
-    "Bring the schematic onto the board, like KiCad's Update PCB from Schematic: every part with a footprint gets its footprint with pads on the right nets. New parts are set down in rows beside the board, block by block, for placing; parts already placed keep their place and get their value and nets updated; parts gone from the schematic are removed. Run it after the schematic changes and before placing or routing. `missing` lists footprints no library has.",
-  parameters: BoardSyncInput,
-  success: BoardSyncResult,
-  failure: HardwareFailure,
-  dependencies: kicadDependencies,
-})
-  .annotate(Tool.Title, "Update board from schematic")
-  .annotate(Tool.Destructive, false)
-  .annotate(Tool.Idempotent, true)
-  .annotate(Tool.OpenWorld, false);
-
-const BoardEditTool = Tool.make("pcb_edit", {
-  description:
-    "Place parts on the board, set its outline and route it. `outline` makes the board a rectangle (x, y, width, height in mm; `radius` rounds its corners). `move` puts a part at a point, slides it `by` an offset, turns it (`rotation`, `rotateBy`) or puts it on the `back`. `track` draws copper through `points`, each a pad ({pad: 'U1.3'}) or a point, on `layer` F.Cu or B.Cu; `via` joins the two sides at a point; `unroute` removes a net's tracks or the ones in `ids`. `keepout` bars tracks, vias and copper fill from a named rectangle: put one under the antenna of every radio module (the end of the module that has no pads) before routing. Copper pours and the silkscreen have their own tools, `pcb_pour` and `pcb_silkscreen`; pours are refilled after every edit here. A track or via that would touch another net is refused with what it hit: go around, or change sides with a via. Edits apply all or none. The reply lists every part with its position, size as it lies, block and whether it is inside the outline, the pairs of parts that overlap (fix those before routing), and `toRoute`: the pad pairs still to join. Pass `nets` to get the pad positions, tracks and vias of those nets before routing them. Call it with no edits to read the board. Keep the parts of a block together, connectors at the edges, decoupling capacitors beside their chip.",
-  parameters: BoardEditInput,
-  success: BoardEditResult,
-  failure: HardwareFailure,
-  dependencies: kicadDependencies,
-})
-  .annotate(Tool.Title, "Edit board")
+  .annotate(Tool.Title, "Copper")
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, false)
-  .annotate(Tool.OpenWorld, false);
-
-const BoardAutorouteTool = Tool.make("pcb_autoroute", {
-  description:
-    "Route the whole board with the auto-router (Freerouting). Use it once the outline is set, every part is placed inside it without overlaps and radio antennas have their `keepout`; it takes seconds to minutes. Tracks already on the board may be redrawn. Unless `finish` is false it then pours GND over the free copper of every layer (when the board has no pour yet) and tidies the references on the silkscreen. The reply gives the tracks and vias drawn and `toRoute`, the pad pairs it could not join: finish those with `pcb_edit`, or move parts apart and route again. Run `kicad_drc` afterwards.",
-  parameters: BoardAutorouteInput,
-  success: BoardAutorouteResult,
-  failure: HardwareFailure,
-  dependencies: kicadDependencies,
-})
-  .annotate(Tool.Title, "Auto-route board")
-  .annotate(Tool.Destructive, false)
-  .annotate(Tool.Idempotent, false)
-  .annotate(Tool.OpenWorld, false);
-
-const BoardReadTool = Tool.make("pcb_read", {
-  description:
-    "Look at the board: parts with their place, turn and side, nets, how much is still unrouted, the outline. `what: ['elegance']` scores the layout out of 100 and names what drags it down with numbers (a decoupling capacitor far from its pin, a connector off the edge). `refs` and `net` narrow the answer. Cheap: read before and after you move or route things, rather than trusting what you remember.",
-  parameters: BoardReadInput,
-  success: BoardEngineResult,
-  failure: HardwareFailure,
-  dependencies: kicadDependencies,
-})
-  .annotate(Tool.Title, "Read board")
-  .annotate(Tool.Readonly, true)
-  .annotate(Tool.Destructive, false)
-  .annotate(Tool.Idempotent, true)
-  .annotate(Tool.OpenWorld, false);
-
-const BoardRoutePlanTool = Tool.make("pcb_route_plan", {
-  description:
-    "The facts for planning the routing, before any track is drawn: every net with its kind (power, signal, differential pair), pads, length and width class; the rules; keep-outs and pours; a map of where the board is crowded; and a `suggested_plan` with the plan's full shape. Read it, decide the order and the special cases, then call `pcb_route`.",
-  parameters: BoardRoutePlanInput,
-  success: BoardEngineResult,
-  failure: HardwareFailure,
-  dependencies: kicadDependencies,
-})
-  .annotate(Tool.Title, "Plan routing")
-  .annotate(Tool.Readonly, true)
-  .annotate(Tool.Destructive, false)
-  .annotate(Tool.Idempotent, true)
-  .annotate(Tool.OpenWorld, false);
-
-const BoardRouteTool = Tool.make("pcb_route", {
-  description:
-    "Route the board to your plan: you decide the order and the rules, a path finder draws the tracks, and KiCad's DRC judges them. Put the nets that matter first (USB and other fast pairs, crystals, supply paths), then `*`. Tracks already on the board stay unless `ripup` says otherwise, so you can route a few nets, look, and go on. The reply gives what was routed, new DRC errors with their place, `failed` connections with where they stopped and which nets blocked them, and `suggest` with changes to the plan. When nets block each other, change the order or rip those nets up and route again; when a corner will not route, move the parts or swap interchangeable pins rather than adding vias. `dryRun` tries a plan without touching the board. This replaces `pcb_autoroute` for most boards.",
-  parameters: BoardRouteInput,
-  success: BoardEngineResult,
-  failure: HardwareFailure,
-  dependencies: kicadDependencies,
-})
-  .annotate(Tool.Title, "Route board")
-  .annotate(Tool.Destructive, false)
-  .annotate(Tool.Idempotent, false)
-  .annotate(Tool.OpenWorld, false);
-
-const BoardReviewTool = Tool.make("pcb_review", {
-  description:
-    "Judge the board as a reviewer would: DRC errors and warnings, each with its place and a way to fix it, and the layout score with its worst points (decoupling far from pins, connectors off the edge, thin power tracks, needless vias). Run it after placing and again after routing, fix what it lists, and do not call the board done on a clean DRC alone.",
-  parameters: BoardReviewInput,
-  success: BoardEngineResult,
-  failure: HardwareFailure,
-  dependencies: kicadDependencies,
-})
-  .annotate(Tool.Title, "Review board")
-  .annotate(Tool.Readonly, true)
-  .annotate(Tool.Destructive, false)
-  .annotate(Tool.Idempotent, true)
-  .annotate(Tool.OpenWorld, false);
-
-const BoardPourTool = Tool.make("pcb_pour", {
-  description:
-    "Copper pour (ground plane, zone fill): fill the free copper of the board with a net, normally GND on every copper layer. Pads of the net join it through thermal spokes, pours on several layers are stitched together with vias, keep-out areas stay clear, and every later board edit refills it. Replaces that net's pour on those layers; `remove` takes it off. The reply's `pours` gives the copper each layer got and `toRoute` what is still unconnected. Do this in Kitty, not in KiCad.",
-  parameters: BoardPourInput,
-  success: BoardEditResult,
-  failure: HardwareFailure,
-  dependencies: kicadDependencies,
-})
-  .annotate(Tool.Title, "Pour copper")
-  .annotate(Tool.Destructive, false)
-  .annotate(Tool.Idempotent, true)
-  .annotate(Tool.OpenWorld, false);
-
-const BoardSilkscreenTool = Tool.make("pcb_silkscreen", {
-  description:
-    "Silkscreen: `tidy` puts every part's reference (R1, U2) beside its part at one readable size, which clears the silk_overlap and silk_over_copper warnings of `kicad_drc`; `labels` moves, turns or hides single references; `texts` prints a board name, version or pin labels; `removeTexts` takes texts off by id. The reply's `texts` lists the free texts. Do this in Kitty, not in KiCad.",
-  parameters: BoardSilkscreenInput,
-  success: BoardEditResult,
-  failure: HardwareFailure,
-  dependencies: kicadDependencies,
-})
-  .annotate(Tool.Title, "Edit silkscreen")
-  .annotate(Tool.Destructive, false)
-  .annotate(Tool.Idempotent, false)
-  .annotate(Tool.OpenWorld, false);
+  .annotate(Tool.OpenWorld, true);
 
 const KicadNetlistTool = Tool.make("kicad_netlist", {
   description:
@@ -397,33 +234,6 @@ const KicadNetlistTool = Tool.make("kicad_netlist", {
 })
   .annotate(Tool.Title, "Read schematic netlist")
   .annotate(Tool.Readonly, true)
-  .annotate(Tool.Destructive, false)
-  .annotate(Tool.Idempotent, true)
-  .annotate(Tool.OpenWorld, false);
-
-const KicadBomTool = Tool.make("kicad_bom", {
-  description:
-    "Bill of materials from a schematic, grouped by value and footprint, with LCSC/MPN fields. Lists parts that have no LCSC or MPN.",
-  parameters: KicadBomInput,
-  success: KicadBomResult,
-  failure: HardwareFailure,
-  dependencies: kicadDependencies,
-})
-  .annotate(Tool.Title, "Read bill of materials")
-  .annotate(Tool.Readonly, true)
-  .annotate(Tool.Destructive, false)
-  .annotate(Tool.Idempotent, true)
-  .annotate(Tool.OpenWorld, false);
-
-const KicadFabExportTool = Tool.make("kicad_fab_export", {
-  description:
-    "Export what JLC needs to make and assemble a board: a zip of Gerbers and drill files to upload for the PCB, plus the BOM (`bom`) and placement file (`cpl`) in JLC's columns for assembly. It runs DRC first and refuses while there are errors or unrouted connections; fix those rather than passing `force`. `unsourced` lists parts with no LCSC number, which JLC cannot fit. Tell the user which file goes where on JLC's order page, and to check part orientation in JLC's placement preview.",
-  parameters: KicadFabExportInput,
-  success: KicadFabExportResult,
-  failure: HardwareFailure,
-  dependencies: kicadDependencies,
-})
-  .annotate(Tool.Title, "Export fabrication files")
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, true)
   .annotate(Tool.OpenWorld, false);
@@ -475,59 +285,6 @@ const HardwareProjectNewTool = Tool.make("hw_hardware_project_new", {
 })
   .annotate(Tool.Title, "New hardware project")
   .annotate(Tool.Destructive, false)
-  .annotate(Tool.OpenWorld, false);
-
-const JlcPartSearchTool = Tool.make("jlc_part_search", {
-  description:
-    "Find parts in JLC's assembly catalogue by value and package, part number or function. Parts in stock come first, basic before preferred before extended (extended parts cost a loading fee). Every part on a Kitty board comes from here: search, then jlc_part_import.",
-  parameters: JlcPartSearchInput,
-  success: JlcPartSearchResult,
-  failure: HardwareFailure,
-  dependencies: jlcDependencies,
-})
-  .annotate(Tool.Title, "Search JLC parts")
-  .annotate(Tool.Readonly, true)
-  .annotate(Tool.Destructive, false)
-  .annotate(Tool.Idempotent, true)
-  .annotate(Tool.OpenWorld, true);
-
-const JlcPartImportTool = Tool.make("jlc_part_import", {
-  description:
-    "Bring a JLC part into a design by its LCSC number: its symbol, footprint and 3D model go into the design's lib/jlc library, with the LCSC number on the symbol for the BOM. Returns the symbol and footprint ids and the pins, and `model`: whether the 3D model sits on the footprint. That checks position only, never which way round the part faces, so pin 1 still needs a look in the 3D view. Importing a part again updates it.",
-  parameters: JlcPartImportInput,
-  success: JlcImportedPart,
-  failure: HardwareFailure,
-  dependencies: jlcDependencies,
-})
-  .annotate(Tool.Title, "Import JLC part")
-  .annotate(Tool.Destructive, false)
-  .annotate(Tool.Idempotent, true)
-  .annotate(Tool.OpenWorld, true);
-
-const SchematicTidyTool = Tool.make("sch_tidy", {
-  description:
-    "Tidy a schematic (clean up, arrange, auto-layout): every block gets a frame with its name; blocks stand in columns from power in on the left, through the controller, to what it drives; inside a block the big parts are on the left and the small ones in rows beside them; small parts that share a net are joined by drawn wires, with the rail above and ground below (decoupling capacitors on one rail line, a resistor in line with its LED); the sheet grows to fit. Connections and net names are not changed. Only blocks with wired nets that have no name are left as they are. sch_edit does this by itself whenever it places a part; run it after other changes. Parts need a `group` to be sorted into blocks.",
-  parameters: SchematicTidyInput,
-  success: SchematicEditResult,
-  failure: HardwareFailure,
-  dependencies: kicadDependencies,
-})
-  .annotate(Tool.Title, "Tidy schematic")
-  .annotate(Tool.Destructive, false)
-  .annotate(Tool.Idempotent, true)
-  .annotate(Tool.OpenWorld, false);
-
-const SchematicEditTool = Tool.make("sch_edit", {
-  description:
-    "Draw or change a schematic. `place` puts a part on the sheet (a free spot is found when `at` is left out) and connects its pins by net name: give `nets` as pin number to net, and every pin with the same net name is connected. Power nets (GND, +3V3, +5V, VBUS) get power symbols, other nets get labels. Give each part a `group` (Power, MCU, USB) so the blocks of the circuit sit apart and read clearly. The sheet is tidied after a part is placed (see sch_tidy), so `at` is rarely needed. Use `noConnectRest` for parts with unused pins. `connect` changes the nets of a part already on the sheet; `move`, `remove` and `set` change it. Parts must be `jlc:` symbols from jlc_part_import. A supply net that no regulator output drives needs a power:PWR_FLAG placed with that net on pin 1. KiCad reads the result back and nothing is saved if it cannot; the reply gives each part's pins with their nets, the ERC error count, and `userChanges`: what the user changed by hand since your last edit. The user sees your edits marked on the sheet and can revert them; a revert shows up in `userChanges`.",
-  parameters: SchematicEditInput,
-  success: SchematicEditResult,
-  failure: HardwareFailure,
-  dependencies: kicadDependencies,
-})
-  .annotate(Tool.Title, "Edit schematic")
-  .annotate(Tool.Destructive, false)
-  .annotate(Tool.Idempotent, false)
   .annotate(Tool.OpenWorld, false);
 
 const SchematicChangesTool = Tool.make("sch_changes", {
@@ -597,24 +354,8 @@ export const HardwareToolkit = Toolkit.make(
   HardwareMonitorReadTool,
   HardwareResetTool,
   HardwareFlashTool,
-  KicadErcTool,
-  KicadDrcTool,
-  BoardSyncTool,
-  BoardAutorouteTool,
-  BoardReadTool,
-  BoardRoutePlanTool,
-  BoardRouteTool,
-  BoardReviewTool,
-  BoardEditTool,
-  BoardPourTool,
-  BoardSilkscreenTool,
+  DesignEngineTool,
   KicadNetlistTool,
-  KicadBomTool,
-  KicadFabExportTool,
-  JlcPartSearchTool,
-  JlcPartImportTool,
-  SchematicEditTool,
-  SchematicTidyTool,
   SchematicChangesTool,
   HardwareProjectNewTool,
   HardwareProjectInspectTool,

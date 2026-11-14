@@ -1,4 +1,4 @@
-/** Copper, the PCB engine Kitty runs for reading, routing and reviewing boards. */
+/** Copper, the KiCad engine Kitty runs for the design, from the schematic to the fab files. */
 
 /** The Copper commit Kitty was tested with; a newer one is taken only by changing this. */
 export const COPPER_COMMIT = "303964c8b70cb0f99b1635efcc681ec83d237c3c";
@@ -38,7 +38,7 @@ server = subprocess.Popen(
     [sys.executable, "-I", "-c",
      "import sys; sys.path.insert(0, %r); from copper_kicad.cli import main; sys.argv = ['copper', 'serve']; main()" % source],
     stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
-    cwd=os.path.dirname(project))
+    cwd=os.path.dirname(project) or None)
 
 def call(number, method, params):
     server.stdin.write(json.dumps({"jsonrpc": "2.0", "id": number, "method": method, "params": params}) + "\\n")
@@ -64,7 +64,9 @@ def text_of(reply):
 call(1, "initialize", {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "kitty", "version": "1"}})
 server.stdin.write(json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}) + "\\n")
 server.stdin.flush()
-_, failed = text_of(call(2, "tools/call", {"name": "project_open", "arguments": {"path": project}}))
+failed = None
+if project:
+    _, failed = text_of(call(2, "tools/call", {"name": "project_open", "arguments": {"path": project}}))
 text = None
 if failed is None:
     text, failed = text_of(call(3, "tools/call", {"name": tool, "arguments": json.loads(arguments)}))
@@ -87,23 +89,6 @@ export interface EngineReply {
   readonly report: string;
 }
 
-/** The engine names its own tools in its hints; these are the Kitty tools that do the same. */
-const KITTY_TOOLS: ReadonlyArray<readonly [RegExp, string]> = [
-  [/pcb_place\(moves=\[\{ref:'([^']+)', x:\.\., y:\.\.\}\]\)/g, "pcb_edit move $1"],
-  [
-    /pcb_place\(auto=true, clear_tracks=true\) then pcb_route\(\)/g,
-    "move the parts with pcb_edit, then pcb_route with ripup all",
-  ],
-  [/pcb_route_guided\(/g, "pcb_route("],
-  [/fab_export\(\)/g, "kicad_fab_export"],
-  [/verify\(what=\[[^\]]*\]\)|verify\(\)/g, "pcb_review"],
-  [/checkpoint\(action='restore'[^)]*\)/g, "undo in the designer"],
-];
-
-/** The engine's text with its tool names turned into Kitty's. */
-export const inKittyTerms = (text: string): string =>
-  KITTY_TOOLS.reduce((result, [pattern, name]) => result.replace(pattern, name), text);
-
 /** The runner's last line of output, read back; undefined when it is not a reply. */
 export function parseEngineReply(
   stdout: string,
@@ -114,9 +99,9 @@ export function parseEngineReply(
     const parsed: unknown = JSON.parse(line);
     if (typeof parsed !== "object" || parsed === null) return undefined;
     const reply = parsed as { summary?: unknown; report?: unknown; error?: unknown };
-    if (typeof reply.error === "string") return { error: inKittyTerms(reply.error) };
+    if (typeof reply.error === "string") return { error: reply.error };
     return typeof reply.summary === "string" && typeof reply.report === "string"
-      ? { summary: inKittyTerms(reply.summary), report: inKittyTerms(reply.report) }
+      ? { summary: reply.summary, report: reply.report }
       : undefined;
   } catch {
     return undefined;

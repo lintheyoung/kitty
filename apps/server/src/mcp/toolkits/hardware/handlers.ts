@@ -2,7 +2,6 @@ import { HardwareToolError } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 
 import * as HardwareService from "../../../hardware/HardwareService.ts";
-import * as JlcPartsService from "../../../hardware/JlcPartsService.ts";
 import * as KicadService from "../../../hardware/KicadService.ts";
 import { createBoardTest, runBoardTests } from "../../../hardware/boardTestRunner.ts";
 import { createHardwareRepo } from "../../../hardware/newHardwareProject.ts";
@@ -107,170 +106,21 @@ export const layer = McpToolAccess.toLayer(HardwareToolkit, {
       );
     }),
   ),
-  kicad_erc: McpToolAccess.actsAsCaller((input) =>
+  copper: McpToolAccess.actsAsCaller((input) =>
     Effect.gen(function* () {
       const kicad = yield* KicadService.KicadService;
-      return yield* kicad.erc({ ...input, workspaceRoot: yield* callerWorkspaceRoot() });
-    }),
-  ),
-  kicad_drc: McpToolAccess.actsAsCaller((input) =>
-    Effect.gen(function* () {
-      const kicad = yield* KicadService.KicadService;
-      return yield* kicad.drc({ ...input, workspaceRoot: yield* callerWorkspaceRoot() });
-    }),
-  ),
-  pcb_sync: McpToolAccess.actsAsCaller((input) =>
-    Effect.gen(function* () {
-      const kicad = yield* KicadService.KicadService;
-      return yield* kicad.boardSync({ ...input, workspaceRoot: yield* callerWorkspaceRoot() });
-    }),
-  ),
-  pcb_autoroute: McpToolAccess.actsAsCaller((input) =>
-    Effect.gen(function* () {
-      const kicad = yield* KicadService.KicadService;
-      return yield* kicad.boardAutoroute({ ...input, workspaceRoot: yield* callerWorkspaceRoot() });
-    }),
-  ),
-  pcb_read: McpToolAccess.actsAsCaller((input) =>
-    Effect.gen(function* () {
-      const kicad = yield* KicadService.KicadService;
-      const { path, ...query } = input;
-      return yield* kicad.boardEngine({
-        path,
-        tool: "pcb_read",
-        arguments: query,
-        writes: false,
-        workspaceRoot: yield* callerWorkspaceRoot(),
-      });
-    }),
-  ),
-  pcb_route_plan: McpToolAccess.actsAsCaller((input) =>
-    Effect.gen(function* () {
-      const kicad = yield* KicadService.KicadService;
-      return yield* kicad.boardEngine({
+      return yield* kicad.designEngine({
         path: input.path,
-        tool: "pcb_route_plan",
-        arguments: {},
-        writes: false,
+        tool: input.tool,
+        arguments: input.arguments ?? {},
         workspaceRoot: yield* callerWorkspaceRoot(),
       });
-    }),
-  ),
-  pcb_route: McpToolAccess.actsAsCaller((input) =>
-    Effect.gen(function* () {
-      const kicad = yield* KicadService.KicadService;
-      return yield* kicad.boardEngine({
-        path: input.path,
-        tool: "pcb_route_guided",
-        arguments: {
-          ...(input.plan ? { plan: input.plan } : {}),
-          ...(input.dryRun ? { dry_run: true } : {}),
-          ...(input.ripup ? { ripup: input.ripup } : {}),
-          ...(input.nets ? { nets: input.nets } : {}),
-        },
-        writes: input.dryRun !== true,
-        workspaceRoot: yield* callerWorkspaceRoot(),
-      });
-    }),
-  ),
-  pcb_review: McpToolAccess.actsAsCaller((input) =>
-    Effect.gen(function* () {
-      const kicad = yield* KicadService.KicadService;
-      return yield* kicad.boardEngine({
-        path: input.path,
-        tool: "verify",
-        arguments: { what: ["drc"] },
-        writes: false,
-        workspaceRoot: yield* callerWorkspaceRoot(),
-      });
-    }),
-  ),
-  pcb_pour: McpToolAccess.actsAsCaller((input) =>
-    Effect.gen(function* () {
-      const kicad = yield* KicadService.KicadService;
-      const { path, remove, area, ...pour } = input;
-      return yield* kicad.boardEdit({
-        path,
-        edits: [remove ? { op: "remove_pour", ...pour } : { op: "pour", ...pour, ...area }],
-        workspaceRoot: yield* callerWorkspaceRoot(),
-      });
-    }),
-  ),
-  pcb_silkscreen: McpToolAccess.actsAsCaller((input) =>
-    Effect.gen(function* () {
-      const kicad = yield* KicadService.KicadService;
-      return yield* kicad.boardEdit({
-        path: input.path,
-        edits: [
-          ...(input.removeTexts ?? []).map((id) => ({ op: "remove_text" as const, id })),
-          ...(input.tidy ? [{ op: "tidy_labels" as const }] : []),
-          ...(input.labels ?? []).map((label) => ({ op: "label" as const, ...label })),
-          ...(input.texts ?? []).map((text) => ({ op: "text" as const, ...text })),
-        ],
-        workspaceRoot: yield* callerWorkspaceRoot(),
-      });
-    }),
-  ),
-  pcb_edit: McpToolAccess.actsAsCaller((input) =>
-    Effect.gen(function* () {
-      const kicad = yield* KicadService.KicadService;
-      return yield* kicad.boardEdit({ ...input, workspaceRoot: yield* callerWorkspaceRoot() });
     }),
   ),
   kicad_netlist: McpToolAccess.actsAsCaller((input) =>
     Effect.gen(function* () {
       const kicad = yield* KicadService.KicadService;
       return yield* kicad.netlist({ ...input, workspaceRoot: yield* callerWorkspaceRoot() });
-    }),
-  ),
-  kicad_bom: McpToolAccess.actsAsCaller((input) =>
-    Effect.gen(function* () {
-      const kicad = yield* KicadService.KicadService;
-      return yield* kicad.bom({ ...input, workspaceRoot: yield* callerWorkspaceRoot() });
-    }),
-  ),
-  kicad_fab_export: McpToolAccess.actsAsCaller((input) =>
-    Effect.gen(function* () {
-      const kicad = yield* KicadService.KicadService;
-      return yield* kicad.fabExport({ ...input, workspaceRoot: yield* callerWorkspaceRoot() });
-    }),
-  ),
-  jlc_part_search: McpToolAccess.actsAsCaller((input) =>
-    Effect.gen(function* () {
-      const jlc = yield* JlcPartsService.JlcPartsService;
-      const found = yield* jlc.search(input);
-      // Photo links are long, short-lived and of no use to the agent.
-      return { ...found, parts: found.parts.map(({ image: _image, ...part }) => part) };
-    }),
-  ),
-  jlc_part_import: McpToolAccess.actsAsCaller((input) =>
-    Effect.gen(function* () {
-      const jlc = yield* JlcPartsService.JlcPartsService;
-      return yield* jlc.importPart({ ...input, workspaceRoot: yield* callerWorkspaceRoot() });
-    }),
-  ),
-  sch_edit: McpToolAccess.actsAsCaller((input) =>
-    Effect.gen(function* () {
-      const kicad = yield* KicadService.KicadService;
-      const request = { ...input, workspaceRoot: yield* callerWorkspaceRoot() };
-      const adds = input.edits.some((edit) => edit.op === "place");
-      if (!adds || input.edits.some((edit) => edit.op === "tidy")) {
-        return yield* kicad.schematicEdit(request);
-      }
-      // New parts land in a tidy sheet; the edit still goes through if tidying cannot.
-      return yield* kicad
-        .schematicEdit({ ...request, edits: [...input.edits, { op: "tidy" }] })
-        .pipe(Effect.catch(() => kicad.schematicEdit(request)));
-    }),
-  ),
-  sch_tidy: McpToolAccess.actsAsCaller((input) =>
-    Effect.gen(function* () {
-      const kicad = yield* KicadService.KicadService;
-      return yield* kicad.schematicEdit({
-        path: input.path,
-        edits: [{ op: "tidy" }],
-        workspaceRoot: yield* callerWorkspaceRoot(),
-      });
     }),
   ),
   sch_changes: McpToolAccess.actsAsCaller((input) =>
