@@ -3462,6 +3462,13 @@ export const layerWsRpc = (
               kicadService.boardAutoroute({ path: input.path, workspaceRoot, by: "user" }),
             ),
           ),
+        [WS_METHODS.hardwareDesignAction]: (input) =>
+          requireHardwareWorkspace(input).pipe(
+            Effect.flatMap((workspaceRoot) =>
+              kicadService.designAction({ path: input.path, action: input.action, workspaceRoot }),
+            ),
+            Effect.map((result) => ({ summary: [...result.summary] })),
+          ),
         [WS_METHODS.hardwareBoardEdit]: (input) =>
           requireHardwareWorkspace(input).pipe(
             Effect.flatMap((workspaceRoot) =>

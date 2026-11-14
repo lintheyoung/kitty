@@ -226,6 +226,12 @@ export class KicadService extends Context.Service<
       readonly arguments: Readonly<Record<string, unknown>>;
       readonly by?: SchematicChangeAuthor;
     }) => Effect.Effect<DesignEngineResult, HardwareToolError>;
+    /** One of the designer's buttons (tidy, sync, pour, order), done by Copper. */
+    readonly designAction: (input: {
+      readonly workspaceRoot: string;
+      readonly path: string;
+      readonly action: "tidy" | "sync" | "pour" | "order";
+    }) => Effect.Effect<{ readonly summary: ReadonlyArray<string> }, HardwareToolError>;
     /** The layout review's score and weak points for a board. */
     readonly layoutReview: (input: {
       readonly workspaceRoot: string;
@@ -841,6 +847,37 @@ atexit.register(_kitty_leave)
       state: describeDesignState(text(0), board, unrouted),
       userChanges: [...userChanges],
     };
+  });
+
+  /** The designer's buttons, each carried out by Copper and logged as the user's doing. */
+  const designAction = Effect.fn("KicadService.designAction")(function* (input: {
+    readonly workspaceRoot: string;
+    readonly path: string;
+    readonly action: "tidy" | "sync" | "pour" | "order";
+  }) {
+    const steps: ReadonlyArray<readonly [string, Readonly<Record<string, unknown>>]> =
+      input.action === "tidy"
+        ? [["sch_tidy", { force: true, preview: false }]]
+        : input.action === "sync"
+          ? [["pcb_sync", {}]]
+          : input.action === "pour"
+            ? [
+                ["pcb_pour", { render: false }],
+                ["pcb_route", { mode: "polish", render: false }],
+              ]
+            : [["fab_export", {}]];
+    const summary: Array<string> = [];
+    for (const [tool, args] of steps) {
+      const reply = yield* designEngine({
+        workspaceRoot: input.workspaceRoot,
+        path: input.path,
+        tool,
+        arguments: args,
+        by: "user",
+      });
+      summary.push(reply.summary);
+    }
+    return { summary };
   });
 
   /** The layout's score and weak points, as review findings beside the DRC's. */
@@ -1749,10 +1786,12 @@ atexit.register(_kitty_leave)
       }
     }
     const boardFile = Option.isSome(board) ? yield* load(board.value.file, "Board") : undefined;
+    const beside = Option.getOrUndefined(schematic)?.file ?? Option.getOrUndefined(board)?.file;
     return {
       sheets,
       ...(boardFile ? { board: boardFile } : {}),
       omitted,
+      changes: beside ? (yield* readChanges(path.dirname(beside))).slice(-RECENT_CHANGES) : [],
     } satisfies KicadDesignSourceResult;
   });
 
@@ -1918,6 +1957,8 @@ atexit.register(_kitty_leave)
   });
 
   const isEditError = Schema.is(SchematicEditError);
+  /** How many of the newest log entries the designer shows as activity. */
+  const RECENT_CHANGES = 30;
   const HISTORY_LIMIT = 50;
   /** Earlier and undone versions of each schematic edited here, newest last. */
   interface Version {
@@ -2195,6 +2236,7 @@ atexit.register(_kitty_leave)
     schematicReview,
     boardAutoroute,
     designEngine,
+    designAction,
     layoutReview,
     boardSync,
     boardEdit,

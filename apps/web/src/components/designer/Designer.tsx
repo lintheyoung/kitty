@@ -1,5 +1,4 @@
 import type { KicadDesignSourceResult, ProjectId, ScopedThreadRef } from "@t3tools/contracts";
-import { finishingEdits } from "@t3tools/shared/kicad/boardFinish";
 import { buildBoardScene } from "@t3tools/shared/kicad/boardScene";
 import { displayNet, sameNet } from "@t3tools/shared/kicad/pick";
 import { ratsnest } from "@t3tools/shared/kicad/ratsnest";
@@ -41,20 +40,19 @@ import { runAtomCommand } from "@t3tools/client-runtime/state/runtime";
 import { appAtomRegistry } from "../../rpc/atomRegistry";
 import {
   hardwareBoardAutoroute,
-  hardwareBoardSync,
+  hardwareDesignAction,
   hardwareDesigns,
   hardwareDesignSource,
-  hardwareFabExport,
 } from "../../state/hardware";
 import { formatEnvironmentQueryError, useEnvironmentQuery } from "../../state/query";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { BoardModelView } from "./BoardModelView";
-import { boardSyncSummary } from "./boardSyncSummary.ts";
 import { DesignCanvas } from "./DesignCanvas";
 import { designMention, withMention, withRequest } from "./designMention.ts";
 import { currentStep, type DesignStep, designSteps } from "./designSteps.ts";
 import { PartSearch } from "./PartSearch";
+import { ActivityLog } from "./ActivityLog";
 import { ProblemList } from "./ProblemList";
 import { boardProblems, countProblems, fixRequest, sheetProblems } from "./problems.ts";
 import {
@@ -903,24 +901,25 @@ function DesignerView(props: {
     store.setPrompt(props.threadRef, withRequest(prompt, step.prompt));
   };
 
-  /** Brings the schematic's parts and nets onto the board. */
-  const syncBoard = async () => {
+  /** One of the buttons Copper carries out; the result shows in the status line. */
+  const runAction = async (action: "tidy" | "sync" | "pour" | "order", working: string) => {
     if (!project || sync.busy) return;
-    setSync({ busy: true });
+    setSync({ busy: true, note: working });
     const result = await runAtomCommand(
       appAtomRegistry,
-      hardwareBoardSync,
-      { environmentId, input: { ...target, path: project } },
+      hardwareDesignAction,
+      { environmentId, input: { ...target, path: project, action } },
       { reportFailure: false },
     );
     if (result._tag === "Success") {
-      setSync({ busy: false, note: boardSyncSummary(result.value) });
+      setSync({ busy: false, note: result.value.summary.join(" ") });
       loaded.refresh();
-      if (checked) void runChecks();
+      if (checked && action !== "order") void runChecks();
     } else {
       setSync({ busy: false, note: formatEnvironmentQueryError(result.cause), failed: true });
     }
   };
+  const syncBoard = () => runAction("sync", "Bringing the schematic onto the board…");
 
   /** Lets the auto-router draw every track it can. */
   const autoroute = async () => {
@@ -943,26 +942,8 @@ function DesignerView(props: {
     }
   };
 
-  /** Writes the files JLC needs; held back while the board has errors or missing tracks. */
-  const exportOrder = async () => {
-    if (!project || sync.busy) return;
-    setSync({ busy: true, note: "Checking the board and writing the order files…" });
-    const result = await runAtomCommand(
-      appAtomRegistry,
-      hardwareFabExport,
-      { environmentId, input: { ...target, path: project } },
-      { reportFailure: false },
-    );
-    if (result._tag === "Success") {
-      const { zip, bom, cpl, unsourced, outputDir } = result.value;
-      const files = [zip, bom, cpl].filter((file) => file !== undefined).length;
-      const missing =
-        unsourced.length > 0 ? ` No LCSC number yet: ${unsourced.slice(0, 8).join(", ")}.` : "";
-      setSync({ busy: false, note: `Wrote ${files} files for JLC to ${outputDir}.${missing}` });
-    } else {
-      setSync({ busy: false, note: formatEnvironmentQueryError(result.cause), failed: true });
-    }
-  };
+  /** Writes the files the fab needs; held back while the board has errors or missing tracks. */
+  const exportOrder = () => runAction("order", "Checking the board and writing the order files…");
 
   const pick = (item: SceneItem | undefined) => {
     setReveal(undefined);
@@ -1103,7 +1084,9 @@ function DesignerView(props: {
             size="xs"
             variant="ghost-muted"
             disabled={sync.busy || editor.busy}
-            onClick={() => void editor.applyBoard([...finishingEdits(scene)])}
+            onClick={() =>
+              void runAction("pour", "Pouring ground and tidying the tracks and labels…")
+            }
           >
             <PaintBucketIcon />
             Pour & tidy
@@ -1133,8 +1116,8 @@ function DesignerView(props: {
           <Button
             size="xs"
             variant="ghost-muted"
-            disabled={editor.busy}
-            onClick={() => void editor.apply([{ op: "tidy" }])}
+            disabled={editor.busy || sync.busy}
+            onClick={() => void runAction("tidy", "Tidying the sheet…")}
           >
             <LayoutGridIcon />
             Tidy
@@ -1407,6 +1390,7 @@ function DesignerView(props: {
       </div>
       <div className="flex shrink-0 items-center gap-3 border-t px-2 py-1 text-xs text-muted-foreground">
         <span className="truncate font-mono">{current?.file}</span>
+        <ActivityLog changes={source?.changes ?? []} />
         {scene ? (
           <span className="shrink-0">
             {scene.items.filter(isPart).length} parts
@@ -1420,7 +1404,7 @@ function DesignerView(props: {
           <span className="truncate text-destructive-foreground">{checks.error}</span>
         ) : null}
         {editor.busy ? <span className="shrink-0">Saving…</span> : null}
-        {sync.note && scene?.kind === "board" ? (
+        {sync.note ? (
           <span className={cn("truncate", sync.failed && "text-destructive-foreground")}>
             {sync.note}
           </span>

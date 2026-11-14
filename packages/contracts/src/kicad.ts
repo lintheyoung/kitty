@@ -1,5 +1,7 @@
 import * as Schema from "effect/Schema";
 
+import { SchematicChange } from "./schematicEdit.ts";
+
 import { ModelFit } from "./jlcParts.ts";
 
 /** Kitty's KiCad 10 adapter (`kicad-cli`). See docs/kitty/开发计划.md, Sprint 3. */
@@ -627,6 +629,8 @@ export const KicadDesignSourceResult = Schema.Struct({
   board: Schema.optional(KicadDesignFile),
   /** Files left out to keep the reply small. */
   omitted: Schema.Int,
+  /** The newest entries of the design's change log, oldest first: who did what, and when. */
+  changes: Schema.Array(SchematicChange),
 });
 export type KicadDesignSourceResult = typeof KicadDesignSourceResult.Type;
 

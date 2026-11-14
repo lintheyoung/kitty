@@ -247,15 +247,15 @@ export const hardwareSchematicReview = createEnvironmentRpcCommand(connectionAto
   label: "environment-data:hardware:schematic-review",
   tag: WS_METHODS.hardwareSchematicReview,
 });
-/** Brings the schematic's parts and nets onto the board. */
-export const hardwareBoardSync = createEnvironmentRpcCommand(connectionAtomRuntime, {
-  label: "environment-data:hardware:board-sync",
-  tag: WS_METHODS.hardwareBoardSync,
-});
 /** Routes the whole board with the auto-router. */
 export const hardwareBoardAutoroute = createEnvironmentRpcCommand(connectionAtomRuntime, {
   label: "environment-data:hardware:board-autoroute",
   tag: WS_METHODS.hardwareBoardAutoroute,
+});
+/** One of the designer's buttons that Copper carries out: tidy, sync, pour, order. */
+export const hardwareDesignAction = createEnvironmentRpcCommand(connectionAtomRuntime, {
+  label: "environment-data:hardware:design-action",
+  tag: WS_METHODS.hardwareDesignAction,
 });
 /** Moves parts on the board and sets its outline; the same edits the agent's pcb_edit makes. */
 export const hardwareBoardEdit = createEnvironmentRpcCommand(connectionAtomRuntime, {

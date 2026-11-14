@@ -488,6 +488,20 @@ export const HardwareDesignInput = Schema.Struct({
 });
 export type HardwareDesignInput = typeof HardwareDesignInput.Type;
 
+/** One of the designer's buttons that Copper carries out. */
+export const HardwareDesignActionInput = Schema.Struct({
+  ...HardwareWorkspaceTarget,
+  path: Schema.String,
+  action: Schema.Literals(["tidy", "sync", "pour", "order"]),
+});
+export type HardwareDesignActionInput = typeof HardwareDesignActionInput.Type;
+
+export const HardwareDesignActionResult = Schema.Struct({
+  /** What was done, one line per step. */
+  summary: Schema.Array(Schema.String),
+});
+export type HardwareDesignActionResult = typeof HardwareDesignActionResult.Type;
+
 /** Change a design's schematic from the designer. */
 export const HardwareSchematicEditInput = Schema.Struct({
   ...HardwareWorkspaceTarget,
