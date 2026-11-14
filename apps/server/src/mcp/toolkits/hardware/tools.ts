@@ -48,6 +48,11 @@ import {
   BoardEditResult,
   BoardAutorouteInput,
   BoardAutorouteResult,
+  BoardEngineResult,
+  BoardReadInput,
+  BoardReviewInput,
+  BoardRouteInput,
+  BoardRoutePlanInput,
   BoardPourInput,
   BoardSilkscreenInput,
   BoardSyncInput,
@@ -301,6 +306,61 @@ const BoardAutorouteTool = Tool.make("pcb_autoroute", {
   .annotate(Tool.Idempotent, false)
   .annotate(Tool.OpenWorld, false);
 
+const BoardReadTool = Tool.make("pcb_read", {
+  description:
+    "Look at the board: parts with their place, turn and side, nets, how much is still unrouted, the outline. `what: ['elegance']` scores the layout out of 100 and names what drags it down with numbers (a decoupling capacitor far from its pin, a connector off the edge). `refs` and `net` narrow the answer. Cheap: read before and after you move or route things, rather than trusting what you remember.",
+  parameters: BoardReadInput,
+  success: BoardEngineResult,
+  failure: HardwareFailure,
+  dependencies: kicadDependencies,
+})
+  .annotate(Tool.Title, "Read board")
+  .annotate(Tool.Readonly, true)
+  .annotate(Tool.Destructive, false)
+  .annotate(Tool.Idempotent, true)
+  .annotate(Tool.OpenWorld, false);
+
+const BoardRoutePlanTool = Tool.make("pcb_route_plan", {
+  description:
+    "The facts for planning the routing, before any track is drawn: every net with its kind (power, signal, differential pair), pads, length and width class; the rules; keep-outs and pours; a map of where the board is crowded; and a `suggested_plan` with the plan's full shape. Read it, decide the order and the special cases, then call `pcb_route`.",
+  parameters: BoardRoutePlanInput,
+  success: BoardEngineResult,
+  failure: HardwareFailure,
+  dependencies: kicadDependencies,
+})
+  .annotate(Tool.Title, "Plan routing")
+  .annotate(Tool.Readonly, true)
+  .annotate(Tool.Destructive, false)
+  .annotate(Tool.Idempotent, true)
+  .annotate(Tool.OpenWorld, false);
+
+const BoardRouteTool = Tool.make("pcb_route", {
+  description:
+    "Route the board to your plan: you decide the order and the rules, a path finder draws the tracks, and KiCad's DRC judges them. Put the nets that matter first (USB and other fast pairs, crystals, supply paths), then `*`. Tracks already on the board stay unless `ripup` says otherwise, so you can route a few nets, look, and go on. The reply gives what was routed, new DRC errors with their place, `failed` connections with where they stopped and which nets blocked them, and `suggest` with changes to the plan. When nets block each other, change the order or rip those nets up and route again; when a corner will not route, move the parts or swap interchangeable pins rather than adding vias. `dryRun` tries a plan without touching the board. This replaces `pcb_autoroute` for most boards.",
+  parameters: BoardRouteInput,
+  success: BoardEngineResult,
+  failure: HardwareFailure,
+  dependencies: kicadDependencies,
+})
+  .annotate(Tool.Title, "Route board")
+  .annotate(Tool.Destructive, false)
+  .annotate(Tool.Idempotent, false)
+  .annotate(Tool.OpenWorld, false);
+
+const BoardReviewTool = Tool.make("pcb_review", {
+  description:
+    "Judge the board as a reviewer would: DRC errors and warnings, each with its place and a way to fix it, and the layout score with its worst points (decoupling far from pins, connectors off the edge, thin power tracks, needless vias). Run it after placing and again after routing, fix what it lists, and do not call the board done on a clean DRC alone.",
+  parameters: BoardReviewInput,
+  success: BoardEngineResult,
+  failure: HardwareFailure,
+  dependencies: kicadDependencies,
+})
+  .annotate(Tool.Title, "Review board")
+  .annotate(Tool.Readonly, true)
+  .annotate(Tool.Destructive, false)
+  .annotate(Tool.Idempotent, true)
+  .annotate(Tool.OpenWorld, false);
+
 const BoardPourTool = Tool.make("pcb_pour", {
   description:
     "Copper pour (ground plane, zone fill): fill the free copper of the board with a net, normally GND on every copper layer. Pads of the net join it through thermal spokes, pours on several layers are stitched together with vias, keep-out areas stay clear, and every later board edit refills it. Replaces that net's pour on those layers; `remove` takes it off. The reply's `pours` gives the copper each layer got and `toRoute` what is still unconnected. Do this in Kitty, not in KiCad.",
@@ -541,6 +601,10 @@ export const HardwareToolkit = Toolkit.make(
   KicadDrcTool,
   BoardSyncTool,
   BoardAutorouteTool,
+  BoardReadTool,
+  BoardRoutePlanTool,
+  BoardRouteTool,
+  BoardReviewTool,
   BoardEditTool,
   BoardPourTool,
   BoardSilkscreenTool,

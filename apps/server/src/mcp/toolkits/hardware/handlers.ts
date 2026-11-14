@@ -131,6 +131,60 @@ export const layer = McpToolAccess.toLayer(HardwareToolkit, {
       return yield* kicad.boardAutoroute({ ...input, workspaceRoot: yield* callerWorkspaceRoot() });
     }),
   ),
+  pcb_read: McpToolAccess.actsAsCaller((input) =>
+    Effect.gen(function* () {
+      const kicad = yield* KicadService.KicadService;
+      const { path, ...query } = input;
+      return yield* kicad.boardEngine({
+        path,
+        tool: "pcb_read",
+        arguments: query,
+        writes: false,
+        workspaceRoot: yield* callerWorkspaceRoot(),
+      });
+    }),
+  ),
+  pcb_route_plan: McpToolAccess.actsAsCaller((input) =>
+    Effect.gen(function* () {
+      const kicad = yield* KicadService.KicadService;
+      return yield* kicad.boardEngine({
+        path: input.path,
+        tool: "pcb_route_plan",
+        arguments: {},
+        writes: false,
+        workspaceRoot: yield* callerWorkspaceRoot(),
+      });
+    }),
+  ),
+  pcb_route: McpToolAccess.actsAsCaller((input) =>
+    Effect.gen(function* () {
+      const kicad = yield* KicadService.KicadService;
+      return yield* kicad.boardEngine({
+        path: input.path,
+        tool: "pcb_route_guided",
+        arguments: {
+          ...(input.plan ? { plan: input.plan } : {}),
+          ...(input.dryRun ? { dry_run: true } : {}),
+          ...(input.ripup ? { ripup: input.ripup } : {}),
+          ...(input.nets ? { nets: input.nets } : {}),
+        },
+        writes: input.dryRun !== true,
+        workspaceRoot: yield* callerWorkspaceRoot(),
+      });
+    }),
+  ),
+  pcb_review: McpToolAccess.actsAsCaller((input) =>
+    Effect.gen(function* () {
+      const kicad = yield* KicadService.KicadService;
+      return yield* kicad.boardEngine({
+        path: input.path,
+        tool: "verify",
+        arguments: { what: ["drc"] },
+        writes: false,
+        workspaceRoot: yield* callerWorkspaceRoot(),
+      });
+    }),
+  ),
   pcb_pour: McpToolAccess.actsAsCaller((input) =>
     Effect.gen(function* () {
       const kicad = yield* KicadService.KicadService;

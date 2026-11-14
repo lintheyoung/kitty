@@ -86,6 +86,19 @@ import {
   parseAutorouteReport,
   pickFreeroutingJar,
 } from "./boardAutoroute.ts";
+import {
+  COPPER_ARCHIVE_URL,
+  COPPER_COMMIT,
+  COPPER_FOLDER,
+  COPPER_HOME_FOLDER,
+  ENGINE_MISSING,
+  ENGINE_PYTHON_CHECK,
+  ENGINE_PYTHON_VERSION_CHECK,
+  ENGINE_PYTHONS,
+  ENGINE_RUNNER,
+  engineArguments,
+  parseEngineReply,
+} from "./boardEngine.ts";
 import { jlcBomCsv, jlcCplCsv, orderBlockers } from "./jlcFiles.ts";
 import { BOARD_EDIT_SCRIPT, boardEditJob, boardRouting, parseBoardReport } from "./boardEdit.ts";
 import {
@@ -200,6 +213,18 @@ export class KicadService extends Context.Service<
       input: InWorkspace<BoardEditInput> & { readonly by?: SchematicChangeAuthor },
     ) => Effect.Effect<BoardEditResult, HardwareToolError>;
     /** Brings the schematic's parts and nets onto the board. */
+    /** Runs a tool of the PCB engine (Copper) on a design. */
+    readonly boardEngine: (input: {
+      readonly workspaceRoot: string;
+      readonly path: string;
+      readonly tool: string;
+      readonly arguments: Readonly<Record<string, unknown>>;
+      readonly writes: boolean;
+      readonly by?: SchematicChangeAuthor;
+    }) => Effect.Effect<
+      { readonly board: string; readonly summary: string; readonly report: string },
+      HardwareToolError
+    >;
     readonly boardAutoroute: (
       input: InWorkspace<BoardAutorouteInput> & { readonly by?: SchematicChangeAuthor },
     ) => Effect.Effect<BoardAutorouteResult, HardwareToolError>;
@@ -604,6 +629,147 @@ atexit.register(_kitty_leave)
       }
     }
     return yield* failure("toolchain_missing", FREEROUTING_MISSING);
+  });
+
+  /** The PCB engine's source and a Python that runs it, fetched and set up on first use. */
+  let knownEngine: { readonly python: string; readonly source: string } | undefined;
+  const findEngine = Effect.fn("KicadService.findEngine")(function* () {
+    if (knownEngine) return knownEngine;
+    const home = yield* HostProcess.HomeDirectory;
+    const root = path.join(home, COPPER_FOLDER);
+    const checkout = path.join(root, COPPER_COMMIT);
+    const source = path.join(checkout, "src");
+    const io = <A, E extends { readonly message: string }, R>(effect: Effect.Effect<A, E, R>) =>
+      effect.pipe(Effect.mapError((cause) => failure("command_failed", cause.message)));
+    const works = (command: string, check: string) =>
+      processRunner.run({ command, args: ["-c", check], timeout: "30 seconds" }).pipe(
+        Effect.map((run) => run.code === 0 && run.stdout.includes("ok")),
+        Effect.orElseSucceed(() => false),
+      );
+    const must = (command: string, args: ReadonlyArray<string>, what: string) =>
+      processRunner
+        .run({
+          command,
+          args: [...args],
+          timeout: "5 minutes",
+          outputMode: "truncate",
+          timeoutBehavior: "timedOutResult",
+        })
+        .pipe(
+          Effect.mapError((cause) => failure("command_failed", `${what}: ${cause.message}`)),
+          Effect.flatMap((run) =>
+            run.code === 0
+              ? Effect.void
+              : failure(
+                  "command_failed",
+                  `${what}.\n${logTail(`${run.stdout}\n${run.stderr}`, 6)}`,
+                ),
+          ),
+        );
+    const present = fs
+      .exists(path.join(source, "copper_kicad", "__init__.py"))
+      .pipe(Effect.orElseSucceed(() => false));
+    if (!(yield* present)) {
+      yield* io(fs.makeDirectory(checkout, { recursive: true }));
+      const archive = path.join(root, `${COPPER_COMMIT}.tar.gz`);
+      yield* must(
+        "curl",
+        ["-fsSL", "--retry", "2", "-o", archive, COPPER_ARCHIVE_URL],
+        "Could not download the PCB engine. Check the network and try again",
+      );
+      yield* must(
+        "tar",
+        ["-xzf", archive, "-C", checkout, "--strip-components=1"],
+        "Could not unpack the PCB engine",
+      );
+      yield* fs.remove(archive).pipe(Effect.ignore);
+    }
+    const own = path.join(root, "venv", "bin", "python3");
+    for (const python of [own, ...ENGINE_PYTHONS]) {
+      if (yield* works(python, ENGINE_PYTHON_CHECK)) {
+        knownEngine = { python, source };
+        return knownEngine;
+      }
+    }
+    // No Python has Pillow: the engine gets an environment of its own.
+    for (const python of ENGINE_PYTHONS) {
+      if (!(yield* works(python, ENGINE_PYTHON_VERSION_CHECK))) continue;
+      yield* must(
+        python,
+        ["-m", "venv", path.join(root, "venv")],
+        "Could not set up Python for the PCB engine",
+      );
+      yield* must(
+        own,
+        ["-m", "pip", "install", "--quiet", "pillow>=10"],
+        "Could not install what the PCB engine needs. Check the network and try again",
+      );
+      knownEngine = { python: own, source };
+      return knownEngine;
+    }
+    return yield* failure("toolchain_missing", ENGINE_MISSING);
+  });
+
+  /** Runs one tool of the PCB engine on a design; `writes` records the change for undo. */
+  const boardEngine = Effect.fn("KicadService.boardEngine")(function* (input: {
+    readonly workspaceRoot: string;
+    readonly path: string;
+    readonly tool: string;
+    readonly arguments: Readonly<Record<string, unknown>>;
+    readonly writes: boolean;
+    readonly by?: SchematicChangeAuthor;
+  }) {
+    const { file, relative } = yield* resolveDesign(input.workspaceRoot, input.path, ".kicad_pcb");
+    const directory = path.dirname(file);
+    const project = file.replace(/\.kicad_pcb$/, ".kicad_pro");
+    const engine = yield* findEngine();
+    const home = yield* HostProcess.HomeDirectory;
+    const readBoard = fs
+      .readFileString(file)
+      .pipe(Effect.mapError((cause) => failure("invalid_path", cause.message)));
+    const before = yield* readBoard;
+    const run = yield* Effect.scoped(
+      Effect.gen(function* () {
+        const temp = yield* fs.makeTempDirectoryScoped({ prefix: "kitty-engine-" });
+        const runner = path.join(temp, "runner.py");
+        yield* fs.writeFileString(runner, ENGINE_RUNNER);
+        return yield* processRunner.run({
+          command: engine.python,
+          args: [
+            "-I",
+            runner,
+            engine.source,
+            project,
+            input.tool,
+            engineArguments(input.arguments),
+          ],
+          cwd: directory,
+          env: { COPPER_HOME: path.join(home, COPPER_HOME_FOLDER) },
+          timeout: "12 minutes",
+          maxOutputBytes: 8 * 1024 * 1024,
+          timeoutBehavior: "timedOutResult",
+        });
+      }),
+    ).pipe(Effect.mapError((cause) => failure("command_failed", cause.message)));
+    const reply = parseEngineReply(run.stdout);
+    if (!reply) {
+      return yield* failure(
+        "command_failed",
+        `The PCB engine gave no answer.\n${logTail(`${run.stdout}\n${run.stderr}`, 8)}`,
+      );
+    }
+    if ("error" in reply) return yield* failure("invalid_argument", reply.error);
+    const after = input.writes ? yield* readBoard : before;
+    if (after !== before) {
+      const summary = [reply.summary];
+      const history = historyOf(file, before);
+      history.undo.push({ source: before, summary });
+      if (history.undo.length > HISTORY_LIMIT) history.undo.shift();
+      history.redo.length = 0;
+      history.current = after;
+      yield* recordChange(directory, input.by ?? "agent", summary);
+    }
+    return { board: relative, summary: reply.summary, report: reply.report };
   });
 
   const boardAutoroute = Effect.fn("KicadService.boardAutoroute")(function* (
@@ -1896,6 +2062,7 @@ atexit.register(_kitty_leave)
     schematicHistory,
     schematicReview,
     boardAutoroute,
+    boardEngine,
     boardSync,
     boardEdit,
     seatLibraryModels,

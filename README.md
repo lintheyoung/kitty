@@ -18,7 +18,8 @@ harness (threads, providers, terminals, diffs) and adds the hardware side.
 - **Schematic**: the agent places parts from the JLC catalog, connects pins by net, and tidies the
   sheet into framed blocks with drawn wires. You can edit by hand in the same view, with undo.
   Every edit is read back by KiCad and checked with ERC before it is saved.
-- **PCB**: placement, autorouting, copper pours, silkscreen, DRC, a 3D view with a check that
+- **PCB**: placement, routing to a plan the agent writes, a layout review, copper pours,
+  silkscreen, DRC, a 3D view with a check that
   each 3D model sits on its footprint, and order files for JLCPCB.
 - **Firmware**: ESP-IDF projects are built, flashed and monitored from the Hardware panel. Kitty
   can install a pinned ESP-IDF for you.
@@ -61,6 +62,13 @@ Kitty collects no usage data, and automatic updates are off. See [privacy](./doc
 - [Development plan](./docs/kitty/开发计划.md) (Chinese)
 - [Board designer: features and interface](./docs/kitty/板图设计器-功能与界面设计.md) (Chinese)
 - [T3 Code user docs](./docs/user), which still apply to everything Kitty inherits
+
+## Credits
+
+Board reading, routing and layout review run on
+[Copper for KiCad](https://github.com/claynicholson/copper-kicad-mcp) (MIT), which Kitty downloads
+at a pinned version on first use. Parts come from the JLC / LCSC catalog. Autorouting of what is
+left uses Freerouting when it is installed.
 
 ## License
 

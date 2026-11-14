@@ -561,6 +561,77 @@ export const BoardAutorouteResult = Schema.Struct({
 });
 export type BoardAutorouteResult = typeof BoardAutorouteResult.Type;
 
+const boardPath = Schema.String.annotate({
+  description: "The design: its .kicad_pcb, .kicad_pro or directory, relative to the workspace.",
+});
+
+export const BoardReadInput = Schema.Struct({
+  path: boardPath,
+  what: Schema.optional(
+    Schema.Array(
+      Schema.Literals([
+        "summary",
+        "footprints",
+        "nets",
+        "pads",
+        "tracks",
+        "widths",
+        "zones",
+        "elegance",
+      ]),
+    ).annotate({
+      description:
+        "What to read; summary, footprints and nets when absent. `elegance` scores the layout and lists what drags it down; `widths` gives each net's copper by width; `tracks` is large, so give `net` with it.",
+    }),
+  ),
+  refs: Schema.optional(
+    Schema.Array(Schema.String).annotate({ description: "Only these parts, e.g. U1, C3." }),
+  ),
+  net: Schema.optional(Schema.String.annotate({ description: "Only this net's pads and tracks." })),
+});
+export type BoardReadInput = typeof BoardReadInput.Type;
+
+export const BoardRoutePlanInput = Schema.Struct({ path: boardPath });
+export type BoardRoutePlanInput = typeof BoardRoutePlanInput.Type;
+
+export const BoardRouteInput = Schema.Struct({
+  path: boardPath,
+  plan: Schema.optional(
+    Schema.Record(Schema.String, Schema.Unknown).annotate({
+      description:
+        "How to route, in the shape `pcb_route_plan` describes: `order` (net names or globs, critical nets first), `nets` (per net: width, layers, via_cost, max_vias, avoid rectangles, a corridor to follow), `diff_pairs`, `regions` to forbid or make costly, `global` settings. Every field is optional; the suggested plan is used when absent.",
+    }),
+  ),
+  dryRun: Schema.optional(
+    Schema.Boolean.annotate({
+      description: "Try the plan and report the result without changing the board.",
+    }),
+  ),
+  ripup: Schema.optional(
+    Schema.Literals(["all", "nets"]).annotate({
+      description:
+        "`all` removes every track first and routes the board anew; `nets` removes and reroutes only `nets`. Absent: tracks on the board stay and only what is unrouted is routed.",
+    }),
+  ),
+  nets: Schema.optional(
+    Schema.Array(Schema.String).annotate({ description: "Route only these nets." }),
+  ),
+});
+export type BoardRouteInput = typeof BoardRouteInput.Type;
+
+export const BoardReviewInput = Schema.Struct({ path: boardPath });
+export type BoardReviewInput = typeof BoardReviewInput.Type;
+
+/** What the PCB engine found or did. */
+export const BoardEngineResult = Schema.Struct({
+  board: Schema.String,
+  /** The outcome in one line. */
+  summary: Schema.String,
+  /** The numbers and findings behind it, as JSON text; positions are in millimetres. */
+  report: Schema.String,
+});
+export type BoardEngineResult = typeof BoardEngineResult.Type;
+
 /** The text of one design file, for the client to draw. */
 export const KicadDesignFile = Schema.Struct({
   /** Sheet name, or "Board". */

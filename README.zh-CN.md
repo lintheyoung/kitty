@@ -49,6 +49,10 @@ Kitty 不收集使用数据，自动更新默认关闭。详见[隐私说明](./
 - [板图设计器：功能与界面设计](./docs/kitty/板图设计器-功能与界面设计.md)
 - [T3 Code 用户文档](./docs/user)（英文），Kitty 继承的功能仍然适用
 
+## 致谢
+
+读板、布线和布局审查使用 [Copper for KiCad](https://github.com/claynicholson/copper-kicad-mcp)（MIT 许可），Kitty 在首次使用时下载固定版本。器件来自嘉立创 / LCSC 的器件库。
+
 ## 许可
 
 [MIT](./LICENSE)。Kitty 基于 T3 Code（版权归 T3 Tools Inc.，MIT 许可）。“T3 Code”和 T3 标志归其所有者所有；Kitty 与 T3 Tools Inc. 没有关联，也未获其背书。
