@@ -3333,7 +3333,8 @@ export default function ChatView(props: ChatViewProps) {
                       "wco:pr-(--workspace-native-controls-inset)",
                   )
                 : "flex h-[var(--workspace-topbar-height)] min-h-[var(--workspace-topbar-height)] shrink-0 items-center pl-(--workspace-gutter-start) pr-(--workspace-gutter-end)",
-              COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS,
+              // On the right of the workbench the header is clear of the sidebar's toggle.
+              !designMode && COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS,
               // The window's panel controls sit over this header when the chat is on the right.
               designMode && "pr-28",
             )}

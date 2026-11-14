@@ -250,6 +250,7 @@ import {
 } from "./ui/combobox";
 import { SidebarContent, SidebarGroup, useSidebar } from "./ui/sidebar";
 import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrome";
+import { SidebarBoard } from "./sidebar/SidebarBoard";
 import { SidebarHeaderIconButton, SidebarThreadHeader } from "./sidebar/SidebarThreadHeader";
 import { TooltipProvider } from "./ui/tooltip";
 import { composerDraftHasUserContent, DraftId, useComposerDraftStore } from "../composerDraftStore";
@@ -1111,6 +1112,20 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
           ),
         );
   const isSearchingThreads = threadSearchQuery.trim().length > 0;
+  // The board of the open conversation, shown above the list.
+  const boardThread =
+    routeDraftThread ??
+    threads.find((candidate) => threadShellKey(candidate) === routeRowThreadKey) ??
+    null;
+  const boardProject = boardThread
+    ? projectByKey.get(`${boardThread.environmentId}:${boardThread.projectId}`)
+    : undefined;
+  const boardIsScratch =
+    boardProject !== undefined &&
+    isScratchProject(
+      boardProject,
+      serverConfigs.get(boardProject.environmentId)?.scratchWorkspaceRoot,
+    );
 
   // History, the palette and links can open a thread the scope hides or the list
   // scrolled away; a remount starts at the top, so each mount scrolls to the open
@@ -2970,6 +2985,13 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         className="min-h-full"
         fixedHeader={
           <SidebarGroup className="z-[1]">
+            {routeThreadRef && boardProject && !boardIsScratch ? (
+              <SidebarBoard
+                threadRef={routeThreadRef}
+                projectId={boardProject.id}
+                title={boardProject.title}
+              />
+            ) : null}
             <SidebarThreadHeader
               hasProjects={projectGroups.length > 0}
               projectScope={
