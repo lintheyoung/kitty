@@ -264,7 +264,7 @@ export function BoardTests(props: {
   };
 
   return (
-    <section className="mt-4">
+    <section className="rounded-lg border bg-card p-3">
       <div className="mb-1 flex items-center justify-between">
         <div className="flex items-center gap-1 text-xs font-medium text-muted-foreground">
           <FlaskConicalIcon className="size-3" />

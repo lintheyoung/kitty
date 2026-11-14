@@ -526,7 +526,7 @@ export function HardwareDesigns(props: {
   const [creating, setCreating] = useState(false);
   const list = designs.data?.designs ?? [];
   return (
-    <section className="mt-4">
+    <section className="rounded-lg border bg-card p-3">
       <div className="mb-1 flex items-center justify-between">
         <div className="text-xs font-medium text-muted-foreground">Board design (KiCad)</div>
         {creating ? null : (

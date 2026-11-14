@@ -7,13 +7,15 @@ import type {
   ProjectId,
   ScopedThreadRef,
 } from "@t3tools/contracts";
-import { HammerIcon, LoaderCircleIcon, ZapIcon } from "lucide-react";
+import { CheckIcon, CpuIcon, HammerIcon, LoaderCircleIcon, XIcon, ZapIcon } from "lucide-react";
 import { useState } from "react";
 
 import { useRightPanelStore } from "../../rightPanelStore";
 import { appAtomRegistry } from "../../rpc/atomRegistry";
 import { hardwareBuild, hardwareFlash, hardwareProjects } from "../../state/hardware";
 import { formatEnvironmentQueryError, useEnvironmentQuery } from "../../state/query";
+import { cn } from "~/lib/utils";
+
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 
@@ -138,15 +140,28 @@ function Outcome(props: {
         </Badge>
         <span>{(result.durationMs / 1000).toFixed(1)} s</span>
         {flashed ? <span className="font-mono">· {flashed.port}</span> : null}
-        {built?.appBinary ? (
-          <span>
-            · app {kib(built.appBinary.sizeBytes)} of {kib(built.appBinary.partitionBytes)} (
-            {built.appBinary.freePercent}% free)
-          </span>
-        ) : null}
         {errors.length > 0 ? <span>· {errors.length} error(s)</span> : null}
         {warnings > 0 ? <span>· {warnings} warning(s)</span> : null}
       </div>
+      {built?.appBinary ? (
+        <div className="flex flex-col gap-1">
+          <div className="flex justify-between text-2xs text-muted-foreground">
+            <span>
+              App size: {kib(built.appBinary.sizeBytes)} of {kib(built.appBinary.partitionBytes)}
+            </span>
+            <span>{built.appBinary.freePercent}% free</span>
+          </div>
+          <div className="h-1.5 overflow-hidden rounded-full bg-muted">
+            <div
+              className={cn(
+                "h-full rounded-full",
+                built.appBinary.freePercent < 10 ? "bg-warning" : "bg-success",
+              )}
+              style={{ width: `${Math.min(100, 100 - built.appBinary.freePercent)}%` }}
+            />
+          </div>
+        </div>
+      ) : null}
       {flashed?.backup ? (
         <p className="text-2xs break-all text-muted-foreground">
           {flashed.backup.created ? "Backed up the board first: " : "Board backup: "}
@@ -164,6 +179,68 @@ function Outcome(props: {
         </pre>
       ) : null}
     </div>
+  );
+}
+
+type StepState = "idle" | "active" | "done" | "failed";
+
+/** Where the firmware is on its way to the board: built, flashed, running. */
+function stepStates(state: RunState | undefined): readonly [StepState, StepState, StepState] {
+  if (!state) return ["idle", "idle", "idle"];
+  if (state.status === "running") {
+    return state.action === "build" ? ["active", "idle", "idle"] : ["done", "active", "idle"];
+  }
+  if (state.status === "failed") {
+    return state.action === "build" ? ["failed", "idle", "idle"] : ["done", "failed", "idle"];
+  }
+  if (state.status === "built") return [state.result.ok ? "done" : "failed", "idle", "idle"];
+  return state.result.ok ? ["done", "done", "done"] : ["done", "failed", "idle"];
+}
+
+const STEP_NAMES = ["Build", "Flash", "Running"] as const;
+const STEP_STYLES: Record<StepState, string> = {
+  idle: "border-border text-muted-foreground",
+  active: "border-foreground text-foreground",
+  done: "border-success bg-success/15 text-success",
+  failed: "border-destructive bg-destructive/15 text-destructive-foreground",
+};
+
+function Steps(props: { readonly state: RunState | undefined }) {
+  const states = stepStates(props.state);
+  return (
+    <ol className="flex items-center gap-2 text-xs">
+      {STEP_NAMES.map((name, index) => {
+        const step = states[index] ?? "idle";
+        return (
+          <li key={name} className="flex min-w-0 flex-1 items-center gap-2 last:flex-none">
+            <span
+              className={cn(
+                "flex size-5 shrink-0 items-center justify-center rounded-full border [&_svg]:size-3",
+                STEP_STYLES[step],
+              )}
+            >
+              {step === "active" ? (
+                <LoaderCircleIcon className="animate-spin" />
+              ) : step === "done" ? (
+                <CheckIcon />
+              ) : step === "failed" ? (
+                <XIcon />
+              ) : (
+                index + 1
+              )}
+            </span>
+            <span className={step === "idle" ? "text-muted-foreground" : "font-medium"}>
+              {name}
+            </span>
+            {index < STEP_NAMES.length - 1 ? (
+              <span
+                className={cn("h-px min-w-3 flex-1", step === "done" ? "bg-success" : "bg-border")}
+              />
+            ) : null}
+          </li>
+        );
+      })}
+    </ol>
   );
 }
 
@@ -218,59 +295,55 @@ export function HardwareProjects(props: {
 
   const projects = query.data?.projects ?? [];
   return (
-    <section className="mt-4">
-      <div className="mb-1 text-xs font-medium text-muted-foreground">ESP-IDF projects</div>
+    <section className="rounded-lg border bg-card p-3">
+      <div className="mb-2 text-xs font-medium text-muted-foreground">Firmware</div>
       {query.error !== null ? (
         <p className="text-xs text-destructive-foreground">{query.error}</p>
       ) : projects.length === 0 ? (
-        <p className="text-xs text-muted-foreground">
-          {query.isPending
-            ? "Looking for projects…"
-            : "No ESP-IDF project in this workspace yet. Ask the agent to create one."}
-        </p>
+        <div className="flex flex-col items-center gap-2 rounded-md border border-dashed px-4 py-6 text-center">
+          <CpuIcon className="size-6 text-muted-foreground/60" />
+          <div className="text-sm font-medium">
+            {query.isPending ? "Looking for firmware…" : "No firmware yet"}
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Ask Kitty in the chat to write the firmware for this board.
+          </p>
+        </div>
       ) : (
-        <ul className="divide-y">
+        <ul className="flex flex-col gap-4">
           {projects.map((project) => {
             const state = runs[project.path];
             const running = state?.status === "running" ? state.action : null;
             return (
-              <li key={project.path} className="flex flex-col gap-2 py-2">
+              <li key={project.path} className="flex flex-col gap-3">
                 <div className="flex items-center justify-between gap-2">
                   <div className="min-w-0">
-                    <div className="truncate text-sm font-medium">{projectTitle(project)}</div>
+                    <div className="truncate text-base font-medium">{projectTitle(project)}</div>
                     <div className="truncate font-mono text-2xs text-muted-foreground">
                       {projectDetails(project)}
                     </div>
                   </div>
-                  <div className="flex shrink-0 gap-1">
+                  <div className="flex shrink-0 gap-1.5">
                     <Button
-                      size="xs"
+                      size="sm"
                       variant="outline"
                       disabled={running !== null}
                       onClick={() => void run(project, "build")}
                     >
-                      {running === "build" ? (
-                        <LoaderCircleIcon className="animate-spin" />
-                      ) : (
-                        <HammerIcon />
-                      )}
+                      <HammerIcon />
                       {running === "build" ? "Building…" : "Build"}
                     </Button>
                     <Button
-                      size="xs"
-                      variant="outline"
+                      size="sm"
                       disabled={running !== null}
                       onClick={() => void run(project, "flash")}
                     >
-                      {running === "flash" ? (
-                        <LoaderCircleIcon className="animate-spin" />
-                      ) : (
-                        <ZapIcon />
-                      )}
-                      {running === "flash" ? "Flashing…" : "Flash"}
+                      <ZapIcon />
+                      {running === "flash" ? "Flashing…" : "Flash to board"}
                     </Button>
                   </div>
                 </div>
+                <Steps state={state} />
                 {state ? (
                   <Outcome threadRef={props.threadRef} project={project} state={state} />
                 ) : null}

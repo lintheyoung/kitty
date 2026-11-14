@@ -18,6 +18,8 @@ import {
   hardwarePorts,
 } from "../../state/hardware";
 import { useEnvironmentQuery } from "../../state/query";
+import { cn } from "~/lib/utils";
+
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 
@@ -111,12 +113,43 @@ function MonitorLog(props: {
       {query.error !== null ? (
         <p className="text-xs text-destructive-foreground">{query.error}</p>
       ) : null}
-      <div className="flex max-h-64 flex-col-reverse overflow-auto rounded bg-muted p-2">
+      <div className="flex h-64 flex-col-reverse overflow-auto rounded-md border bg-background p-2">
         <pre className="font-mono text-2xs whitespace-pre-wrap">
           {view && view.log.length > 0 ? view.log : "Waiting for output…"}
         </pre>
       </div>
     </div>
+  );
+}
+
+/** A development board with its USB cable; the cable and status lamp show whether it is in. */
+function BoardArt(props: { readonly connected: boolean }) {
+  return (
+    <svg
+      viewBox="0 0 160 84"
+      aria-hidden
+      className={cn("h-20 w-auto", props.connected ? "text-success" : "text-muted-foreground/60")}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M2 42h26" strokeDasharray={props.connected ? undefined : "4 5"} />
+      <rect x="28" y="33" width="16" height="18" rx="3" />
+      <rect x="44" y="12" width="110" height="60" rx="7" />
+      <rect x="78" y="27" width="34" height="30" rx="3" />
+      <path d="M124 26v32M132 26v32M140 26v32" strokeWidth="1.5" />
+      <path d="M56 12V5M68 12V5M80 12V5M92 12V5M104 12V5M116 12V5M128 12V5M140 12V5" />
+      <path d="M56 72v7M68 72v7M80 72v7M92 72v7M104 72v7M116 72v7M128 72v7M140 72v7" />
+      <circle
+        cx="60"
+        cy="42"
+        r="4"
+        fill={props.connected ? "currentColor" : "none"}
+        className={props.connected ? "animate-pulse" : undefined}
+      />
+    </svg>
   );
 }
 
@@ -128,13 +161,16 @@ function PortRow(props: {
   const [monitor, setMonitor] = useState<{ session: number; reset: boolean } | null>(null);
   const board = port.kind !== "other";
   return (
-    <li className="flex flex-col gap-2 py-2">
-      <div className="flex items-center justify-between gap-2">
-        <div className="min-w-0">
-          <div className="flex items-center gap-1.5 text-sm font-medium">
-            {board ? <PlugZapIcon className="size-3.5 text-success" /> : null}
-            <span className="truncate">{port.label}</span>
-            {port.heldBy ? <Badge variant="warning">{port.heldBy}</Badge> : null}
+    <li className="flex flex-col gap-3">
+      <div className="flex items-center gap-3">
+        {board ? <BoardArt connected /> : <PlugZapIcon className="size-4 text-muted-foreground" />}
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-1.5">
+            {board ? <Badge variant="success">Connected</Badge> : null}
+            {port.heldBy ? <Badge variant="warning">In use: {port.heldBy}</Badge> : null}
+          </div>
+          <div className={cn("truncate font-medium", board ? "mt-1 text-base" : "text-sm")}>
+            {port.label}
           </div>
           <div className="truncate font-mono text-2xs text-muted-foreground">
             {port.device}
@@ -142,14 +178,14 @@ function PortRow(props: {
           </div>
         </div>
         <Button
-          size="xs"
-          variant="outline"
+          size="sm"
+          variant={monitor ? "outline" : board ? "default" : "outline"}
           onClick={() =>
             setMonitor((current) => (current ? null : { session: Date.now(), reset: false }))
           }
         >
           {monitor ? <SquareIcon /> : <TerminalIcon />}
-          {monitor ? "Stop" : "Monitor"}
+          {monitor ? "Stop" : "Serial monitor"}
         </Button>
       </div>
       {monitor ? (
@@ -166,33 +202,75 @@ function PortRow(props: {
   );
 }
 
-/** Connected boards, each with a serial monitor. */
-export function HardwareBoards(props: { readonly environmentId: EnvironmentId }) {
+const CONNECT_STEPS = [
+  "Use a USB data cable, not a charge-only one",
+  "Plug it straight into this computer, not through a hub",
+  "Allow the accessory when macOS asks",
+];
+
+/** The board on the desk: whether it is plugged in, and what it is saying. */
+export function HardwareBoards(props: {
+  readonly environmentId: EnvironmentId;
+  /** Why no board was found, from the toolchain check. */
+  readonly hint?: string | undefined;
+}) {
   const query = useEnvironmentQuery(
     hardwarePorts({ environmentId: props.environmentId, input: {} }),
   );
   const ports = query.data?.ports ?? [];
+  const boards = ports.filter((port) => port.kind !== "other");
+  const others = ports.filter((port) => port.kind === "other");
   return (
-    <section className="mt-4">
-      <div className="mb-1 flex items-center justify-between">
-        <div className="text-xs font-medium text-muted-foreground">Boards</div>
-        <Button size="xs" variant="ghost" disabled={query.isPending} onClick={query.refresh}>
+    <section className="rounded-lg border bg-card p-3">
+      <div className="mb-2 flex items-center justify-between">
+        <div className="text-xs font-medium text-muted-foreground">Board</div>
+        <Button
+          size="xs"
+          variant="ghost-muted"
+          aria-label="Look for boards again"
+          disabled={query.isPending}
+          onClick={query.refresh}
+        >
           <RefreshCwIcon className={query.isPending ? "animate-spin" : undefined} />
         </Button>
       </div>
       {query.error !== null ? (
         <p className="text-xs text-destructive-foreground">{query.error}</p>
-      ) : ports.length === 0 ? (
-        <p className="text-xs text-muted-foreground">
-          {query.isPending ? "Looking for boards…" : "No board connected."}
-        </p>
+      ) : boards.length === 0 ? (
+        <div className="flex flex-col items-center gap-3 rounded-md border border-dashed px-4 py-6 text-center">
+          <BoardArt connected={false} />
+          <div className="text-sm font-medium">
+            {query.isPending ? "Looking for a board…" : "No board connected"}
+          </div>
+          <ol className="flex flex-col gap-1 text-left text-xs text-muted-foreground">
+            {CONNECT_STEPS.map((step, index) => (
+              <li key={step} className="flex gap-2">
+                <span className="flex size-4 shrink-0 items-center justify-center rounded-full border text-2xs">
+                  {index + 1}
+                </span>
+                {step}
+              </li>
+            ))}
+          </ol>
+          {props.hint ? <p className="text-2xs text-muted-foreground/80">{props.hint}</p> : null}
+        </div>
       ) : (
-        <ul className="divide-y">
-          {ports.map((port) => (
+        <ul className="flex flex-col gap-4">
+          {boards.map((port) => (
             <PortRow key={port.device} environmentId={props.environmentId} port={port} />
           ))}
         </ul>
       )}
+      {others.length > 0 ? (
+        <details className="mt-3 text-xs text-muted-foreground">
+          <summary className="cursor-pointer">Other serial ports ({others.length})</summary>
+          <ul className="mt-2 flex flex-col gap-3">
+            {others.map((port) => (
+              <PortRow key={port.device} environmentId={props.environmentId} port={port} />
+            ))}
+          </ul>
+        </details>
+      ) : null}
     </section>
   );
 }
