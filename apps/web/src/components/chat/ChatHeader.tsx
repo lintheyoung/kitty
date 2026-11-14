@@ -61,6 +61,8 @@ interface ChatHeaderProps {
   onOpenHardware?: (() => void) | undefined;
   /** Opens the board designer: the schematic and PCB as live drawings. */
   onOpenDesigner?: (() => void) | undefined;
+  /** Which of the two is showing now, so its button reads as pressed. */
+  activeWorkbench?: "hardware" | "designer" | undefined;
 }
 
 function resolveRenameCommit(input: {
@@ -90,6 +92,7 @@ export const ChatHeader = memo(function ChatHeader({
   onFindInThread,
   onOpenHardware,
   onOpenDesigner,
+  activeWorkbench,
 }: ChatHeaderProps) {
   const activeProjectName = activeProject?.isScratch ? "No project" : activeProject?.title;
   const activeProjectCwd = activeProject?.workspaceRoot ?? null;
@@ -438,17 +441,51 @@ export const ChatHeader = memo(function ChatHeader({
         </WorkspaceBreadcrumbItem>
       </WorkspaceBreadcrumb>
       {isServerThread ? <GuestShareIndicator threadRef={activeThreadRef} /> : null}
-      {onOpenDesigner ? (
-        <Button size="xs" variant="ghost-muted" className="shrink-0" onClick={onOpenDesigner}>
-          <CircuitBoardIcon />
-          Designer
-        </Button>
-      ) : null}
-      {onOpenHardware ? (
-        <Button size="xs" variant="ghost-muted" className="shrink-0" onClick={onOpenHardware}>
-          <CpuIcon />
-          Hardware
-        </Button>
+      {onOpenHardware && onOpenDesigner ? (
+        <div
+          role="group"
+          aria-label="Hardware views"
+          className="flex shrink-0 items-center gap-0.5 rounded-md border border-border/60 p-0.5"
+        >
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  size="xs"
+                  variant={activeWorkbench === "hardware" ? "secondary" : "ghost-muted"}
+                  aria-pressed={activeWorkbench === "hardware"}
+                  onClick={onOpenHardware}
+                />
+              }
+            >
+              <CpuIcon />
+              Hardware
+            </TooltipTrigger>
+            <TooltipPopup side="bottom">
+              Toolchain, connected boards, build and flash
+              {activeWorkbench === "hardware" ? ". Click to hide." : ""}
+            </TooltipPopup>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  size="xs"
+                  variant={activeWorkbench === "designer" ? "secondary" : "ghost-muted"}
+                  aria-pressed={activeWorkbench === "designer"}
+                  onClick={onOpenDesigner}
+                />
+              }
+            >
+              <CircuitBoardIcon />
+              Designer
+            </TooltipTrigger>
+            <TooltipPopup side="bottom">
+              Schematic, PCB and 3D view of the board
+              {activeWorkbench === "designer" ? ". Click to hide." : ""}
+            </TooltipPopup>
+          </Tooltip>
+        </div>
       ) : null}
     </div>
   );

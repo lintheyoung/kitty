@@ -161,14 +161,19 @@ export function useRightPanelActions(input: RightPanelActionsInput) {
     useRightPanelStore.getState().open(activeThreadRef, "device");
   };
   const addDeviceSurfaceStable = useStableCallback(addDeviceSurface);
+  // The header's Hardware and Designer buttons are switches: pressing the one showing hides it.
+  const showing = (kind: "hardware" | "designer") =>
+    rightPanelOpen && activeRightPanelSurface?.kind === kind;
   const addHardwareSurface = () => {
     if (!activeThreadRef) return;
-    useRightPanelStore.getState().open(activeThreadRef, "hardware");
+    if (showing("hardware")) useRightPanelStore.getState().close(activeThreadRef);
+    else useRightPanelStore.getState().open(activeThreadRef, "hardware");
   };
   const addHardwareSurfaceStable = useStableCallback(addHardwareSurface);
   const addDesignerSurface = () => {
     if (!activeThreadRef) return;
-    useRightPanelStore.getState().open(activeThreadRef, "designer");
+    if (showing("designer")) useRightPanelStore.getState().close(activeThreadRef);
+    else useRightPanelStore.getState().open(activeThreadRef, "designer");
   };
   const addDesignerSurfaceStable = useStableCallback(addDesignerSurface);
   const openFileSurface = (relativePath: string) => {

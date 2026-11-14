@@ -3362,6 +3362,11 @@ export default function ChatView(props: ChatViewProps) {
                 ? {
                     onOpenHardware: addHardwareSurfaceStable,
                     onOpenDesigner: addDesignerSurfaceStable,
+                    ...(rightPanelOpen &&
+                    (renderedRightPanelSurface?.kind === "hardware" ||
+                      renderedRightPanelSurface?.kind === "designer")
+                      ? { activeWorkbench: renderedRightPanelSurface.kind }
+                      : {}),
                   }
                 : {})}
             />
