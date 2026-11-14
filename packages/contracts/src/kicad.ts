@@ -33,6 +33,8 @@ export const KicadViolation = Schema.Struct({
   description: Schema.String,
   sheet: Schema.optional(Schema.String),
   items: Schema.Array(KicadViolationItem),
+  /** A way to put it right, when the reviewer gave one. */
+  fix: Schema.optional(Schema.String),
 });
 export type KicadViolation = typeof KicadViolation.Type;
 
@@ -76,6 +78,8 @@ export const KicadDrcResult = Schema.Struct({
   /** Board/schematic mismatches (missing or extra footprints, net differences). */
   schematicParity: Schema.Array(KicadViolation),
   truncated: Schema.Boolean,
+  /** The layout's score out of 100 from the review; absent when the review did not run. */
+  score: Schema.optional(Schema.Number),
 });
 export type KicadDrcResult = typeof KicadDrcResult.Type;
 

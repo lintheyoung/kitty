@@ -13,6 +13,8 @@ export interface DesignFacts {
   readonly unrouted?: number | undefined;
   /** Errors of the last ERC and DRC run; undefined when no check has run. */
   readonly errors?: number | undefined;
+  /** The layout review's score out of 100, when it has run. */
+  readonly score?: number | undefined;
 }
 
 export interface DesignStep {
@@ -29,7 +31,8 @@ const plural = (count: number, word: string) => `${count} ${word}${count === 1 ?
 
 /** The steps in order; the first one not done is where the design stands. */
 export function designSteps(facts: DesignFacts, design: string): ReadonlyArray<DesignStep> {
-  const { parts, footprints, inside, tracks, unrouted, errors } = facts;
+  const { parts, footprints, inside, tracks, unrouted, errors, score } = facts;
+  const layout = score === undefined ? "" : `, layout ${Math.round(score)}/100`;
   const placed = parts > 0 && footprints >= parts && (inside ?? 0) >= footprints;
   const routed = tracks > 0 && (unrouted ?? 0) === 0;
   return [
@@ -38,14 +41,15 @@ export function designSteps(facts: DesignFacts, design: string): ReadonlyArray<D
       label: "Requirements",
       done: parts > 0 || footprints > 0,
       status: "Say what the board should do",
-      prompt: "I want to build a board that ",
+      prompt:
+        "I want to build a board that . Before drawing anything, write the short spec: the supply and its current, the blocks from input to output, the board size and where the connectors go, and what you are unsure of.",
     },
     {
       id: "schematic",
       label: "Schematic",
       done: parts > 0,
       status: parts > 0 ? plural(parts, "part") : "No parts yet",
-      prompt: `Draw the schematic for ${design} from what we agreed, with JLC parts only. Explain each block as you add it.`,
+      prompt: `Draw the schematic for ${design} from what we agreed with the copper tool: JLC Basic parts where they exist, each IC wired as its datasheet's typical application, the whole circuit in as few sch_apply batches as it takes. Fix every ERC error its result lists, then run design_review and tell me what you chose and why.`,
     },
     {
       id: "placement",
@@ -59,7 +63,7 @@ export function designSteps(facts: DesignFacts, design: string): ReadonlyArray<D
             : inside === undefined
               ? "No board outline yet"
               : `${Math.min(inside, parts)} of ${parts} placed`,
-      prompt: `Bring the schematic of ${design} onto the board, set an outline that fits, and place the parts: blocks together, connectors at the edges, decoupling capacitors beside their chips. Explain your choices.`,
+      prompt: `Bring ${design} onto the board with board_build and a size that fits. Then judge the placement before any routing: read pcb_read with what ['elegance'], look at the picture, and move what is wrong by hand (a part auto placement could not seat, a radio module's antenna off the edge, decoupling far from its pin, a connector off the edge). Say what you moved and why.`,
     },
     {
       id: "routing",
@@ -71,22 +75,24 @@ export function designSteps(facts: DesignFacts, design: string): ReadonlyArray<D
           : unrouted
             ? `${plural(unrouted, "connection")} left`
             : plural(tracks, "track"),
-      prompt: `Route ${design}: keep copper out from under any antenna, run the auto-router, then finish what it leaves by hand and tell me what you did.`,
+      prompt: `Route ${design} to a plan: read pcb_route_plan, put the nets that matter first (USB pairs, crystals, supply paths), try the plan with dry_run, then route. When nets block each other change the order or rip those nets up and route them again; when a corner will not route, go back and move the parts or swap interchangeable pins rather than add vias. Keep copper out under and beside any antenna. Tell me what you routed first and what you had to redo.`,
     },
     {
       id: "checks",
       label: "Checks",
       done: errors === 0,
       status:
-        errors === undefined ? "Not run" : errors === 0 ? "No errors" : plural(errors, "error"),
-      prompt: `Run ERC and DRC on ${design}, explain each problem in plain words and fix what you can.`,
+        errors === undefined
+          ? "Not run"
+          : `${errors === 0 ? "No errors" : plural(errors, "error")}${layout}`,
+      prompt: `Review ${design} as a second engineer would: run verify and design_review, read the layout score, and sort every finding into fix now, fix later, or leave with the reason. Fix the first group at its cause, check again, and give me the list of what is left.`,
     },
     {
       id: "order",
       label: "Order",
       done: false,
       status: "Files for JLC",
-      prompt: `Export the JLC fabrication files for ${design} and tell me what to upload.`,
+      prompt: `Make the order pack for ${design} with fab_export once there are no ERC or DRC errors and every part has an LCSC number. Tell me which file goes where on JLC's order page, what the Extended parts cost extra, and what I must check by eye before paying.`,
     },
   ];
 }

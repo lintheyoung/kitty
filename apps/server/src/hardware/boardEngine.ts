@@ -107,3 +107,56 @@ export function parseEngineReply(
     return undefined;
   }
 }
+
+/** What each point of the layout review means, in plain words. */
+const LAYOUT_TITLES: Readonly<Record<string, string>> = {
+  decap_far: "Decoupling capacitors are far from the pins they serve",
+  connector_off_edge: "A connector does not sit at the board edge",
+  vias_per_net: "Tracks change layers often",
+  emptiest_third: "Part of the board is left empty",
+  imbalance: "The parts are bunched on one side",
+  silk_unreadable: "A reference on the silkscreen cannot be read",
+  hs_plane_crossings: "Tracks cross under a fast signal",
+  power_thinner_than_pad: "A supply track is thinner than its pads allow",
+  largest_empty: "A large area of the board is unused",
+  passives_aligned: "Small parts are not lined up",
+};
+
+export interface LayoutReview {
+  /** Out of 100. */
+  readonly score?: number;
+  readonly points: ReadonlyArray<{
+    readonly type: string;
+    readonly description: string;
+    readonly fix?: string;
+  }>;
+}
+
+/** The layout score and its weak points, read from the engine's `elegance` report. */
+export function parseLayoutReview(report: string): LayoutReview {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(report);
+  } catch {
+    return { points: [] };
+  }
+  const elegance = (parsed as { elegance?: unknown } | null)?.elegance;
+  if (typeof elegance !== "object" || elegance === null) return { points: [] };
+  const { score, worst } = elegance as { score?: unknown; worst?: unknown };
+  const points = (Array.isArray(worst) ? worst : []).flatMap((entry: unknown) => {
+    if (typeof entry !== "object" || entry === null) return [];
+    const { what, value, target, fix } = entry as Record<string, unknown>;
+    if (typeof what !== "string") return [];
+    const title = LAYOUT_TITLES[what] ?? what.replaceAll("_", " ");
+    const measured = typeof value === "string" || typeof value === "number" ? `: ${value}` : "";
+    const wanted = typeof target === "string" ? ` (aim: ${target})` : "";
+    return [
+      {
+        type: `layout_${what}`,
+        description: `${title}${measured}${wanted}`,
+        ...(typeof fix === "string" ? { fix } : {}),
+      },
+    ];
+  });
+  return { ...(typeof score === "number" ? { score } : {}), points };
+}

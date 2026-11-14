@@ -51,7 +51,8 @@ const HINTS: Readonly<Record<string, string>> = {
 function toProblem(violation: KicadViolation, key: string): Problem | undefined {
   if (violation.severity === "exclusion") return undefined;
   const located = violation.items.find((item) => item.x !== undefined && item.y !== undefined);
-  const hint = HINTS[violation.type];
+  // The reviewer's own way to fix it says more than the general note for the check.
+  const hint = violation.fix ?? HINTS[violation.type];
   return {
     key,
     severity: violation.severity,
@@ -104,3 +105,21 @@ export const countProblems = (problems: ReadonlyArray<Problem>) => ({
   errors: problems.filter((problem) => problem.severity === "error").length,
   warnings: problems.filter((problem) => problem.severity === "warning").length,
 });
+
+/** What to ask the agent so that it fixes these problems, with where each one is. */
+export function fixRequest(design: string, problems: ReadonlyArray<Problem>): string {
+  const lines = problems.map((problem) => {
+    const where =
+      problem.x === undefined || problem.y === undefined
+        ? ""
+        : ` at (${problem.x.toFixed(1)}, ${problem.y.toFixed(1)}) mm`;
+    const subject = problem.subject ? ` [${problem.subject}]` : "";
+    const hint = problem.hint ? ` Suggested: ${problem.hint}` : "";
+    return `- ${problem.severity}: ${problem.title}${subject}${where}.${hint}`;
+  });
+  const what = problems.length === 1 ? "this problem" : `these ${problems.length} problems`;
+  return [
+    `Fix ${what} in ${design}. Read the design first, decide which are real and which can be left, fix the real ones at their cause (move parts or reroute rather than patch), then run the checks again and tell me what you changed and what you left.`,
+    ...lines,
+  ].join("\n");
+}

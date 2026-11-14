@@ -3319,7 +3319,28 @@ export const layerWsRpc = (
         [WS_METHODS.hardwareDrc]: (input) =>
           requireHardwareWorkspace(input).pipe(
             Effect.flatMap((workspaceRoot) =>
-              kicadService.drc({ path: input.path, workspaceRoot }),
+              kicadService.drc({ path: input.path, workspaceRoot }).pipe(
+                // The layout review rides along; without it the DRC still answers.
+                Effect.flatMap((drc) =>
+                  kicadService.layoutReview({ path: input.path, workspaceRoot }).pipe(
+                    Effect.map((review) => ({
+                      ...drc,
+                      violations: [
+                        ...drc.violations,
+                        ...review.points.map((point) => ({
+                          type: point.type,
+                          severity: "warning" as const,
+                          description: point.description,
+                          items: [],
+                          ...(point.fix ? { fix: point.fix } : {}),
+                        })),
+                      ],
+                      ...(review.score === undefined ? {} : { score: review.score }),
+                    })),
+                    Effect.orElseSucceed(() => drc),
+                  ),
+                ),
+              ),
             ),
           ),
         [WS_METHODS.hardwareBom]: (input) =>

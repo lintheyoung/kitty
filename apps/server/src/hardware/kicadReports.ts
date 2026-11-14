@@ -233,7 +233,8 @@ export function componentPins(netlist: KicadNetlist, ref: string): Array<KicadPi
 const findField = (fields: Readonly<Record<string, string>>, pattern: RegExp) =>
   Object.entries(fields).find(([name, fieldValue]) => pattern.test(name) && fieldValue.trim())?.[1];
 
-const LCSC_FIELD = /^(lcsc|jlc)/i;
+// Copper also stamps `JLC Class` (Basic, Extended), which is not a part number.
+const LCSC_FIELD = /^(lcsc|jlc)(?![ _]?class)/i;
 const MPN_FIELD = /^(mpn|manufacturer[ _]?part|mfr\.?[ _]?part|part[ _]?number|mfg[ _]?part)/i;
 const MANUFACTURER_FIELD = /^(manufacturer|mfr|mfg)$/i;
 

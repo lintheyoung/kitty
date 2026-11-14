@@ -96,8 +96,10 @@ import {
   ENGINE_PYTHON_VERSION_CHECK,
   ENGINE_PYTHONS,
   ENGINE_RUNNER,
+  type LayoutReview,
   engineArguments,
   parseEngineReply,
+  parseLayoutReview,
 } from "./boardEngine.ts";
 import { jlcBomCsv, jlcCplCsv, orderBlockers } from "./jlcFiles.ts";
 import { BOARD_EDIT_SCRIPT, boardEditJob, boardRouting, parseBoardReport } from "./boardEdit.ts";
@@ -224,6 +226,11 @@ export class KicadService extends Context.Service<
       { readonly design: string; readonly summary: string; readonly report: string },
       HardwareToolError
     >;
+    /** The layout review's score and weak points for a board. */
+    readonly layoutReview: (input: {
+      readonly workspaceRoot: string;
+      readonly path: string;
+    }) => Effect.Effect<LayoutReview, HardwareToolError>;
     readonly boardAutoroute: (
       input: InWorkspace<BoardAutorouteInput> & { readonly by?: SchematicChangeAuthor },
     ) => Effect.Effect<BoardAutorouteResult, HardwareToolError>;
@@ -791,9 +798,66 @@ atexit.register(_kitty_leave)
     };
   });
 
+  /** The layout's score and weak points, as review findings beside the DRC's. */
+  const layoutReview = Effect.fn("KicadService.layoutReview")(function* (input: {
+    readonly workspaceRoot: string;
+    readonly path: string;
+  }) {
+    const reply = yield* designEngine({
+      ...input,
+      tool: "pcb_read",
+      arguments: { what: ["elegance"] },
+    });
+    return parseLayoutReview(reply.report);
+  });
+
+  /** Routes what is unrouted with Copper, then pours ground and checks the board. */
+  const routeWithEngine = Effect.fn("KicadService.routeWithEngine")(function* (
+    input: InWorkspace<BoardAutorouteInput> & { readonly by?: SchematicChangeAuthor },
+  ) {
+    const { file, relative } = yield* resolveDesign(input.workspaceRoot, input.path, ".kicad_pcb");
+    const reply = yield* designEngine({
+      workspaceRoot: input.workspaceRoot,
+      path: input.path,
+      tool: "board_build",
+      arguments: {
+        steps: input.finish === false ? ["route", "verify"] : ["route", "pour", "verify"],
+      },
+      ...(input.by ? { by: input.by } : {}),
+    });
+    const after = yield* fs
+      .readFileString(file)
+      .pipe(Effect.mapError((cause) => failure("command_failed", cause.message)));
+    const routing = yield* parseOrFail(() => boardRouting(after), "board");
+    const left =
+      routing.unrouted === 0
+        ? "every connection joined"
+        : `${routing.unrouted} connection${routing.unrouted === 1 ? "" : "s"} left`;
+    const errors = /DRC (\d+) errors?/.exec(reply.summary)?.[1];
+    return {
+      board: relative,
+      summary: [
+        `Routed the board: ${left}${errors === undefined ? "" : `, ${errors} DRC error${errors === "1" ? "" : "s"}`}`,
+      ],
+      tracks: after.split("\n\t(segment").length - 1,
+      vias: after.split("\n\t(via").length - 1,
+      narrow: 0,
+      toRoute: [...routing.toRoute],
+      unrouted: routing.unrouted,
+    } satisfies BoardAutorouteResult;
+  });
+
   const boardAutoroute = Effect.fn("KicadService.boardAutoroute")(function* (
     input: InWorkspace<BoardAutorouteInput> & { readonly by?: SchematicChangeAuthor },
   ) {
+    // Copper routes the board; Freerouting is the fallback on a computer that cannot run it.
+    const byEngine = yield* routeWithEngine(input).pipe(
+      Effect.catchIf(
+        (error) => error.code === "toolchain_missing",
+        () => Effect.undefined,
+      ),
+    );
+    if (byEngine) return byEngine;
     const { file, relative } = yield* resolveDesign(input.workspaceRoot, input.path, ".kicad_pcb");
     const directory = path.dirname(file);
     const before = yield* fs
@@ -2082,6 +2146,7 @@ atexit.register(_kitty_leave)
     schematicReview,
     boardAutoroute,
     designEngine,
+    layoutReview,
     boardSync,
     boardEdit,
     seatLibraryModels,

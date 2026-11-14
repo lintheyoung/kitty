@@ -1,7 +1,7 @@
 import type { KicadDrcResult, KicadErcResult, KicadViolation } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { boardProblems, countProblems, sheetProblems } from "./problems.ts";
+import { boardProblems, countProblems, fixRequest, sheetProblems } from "./problems.ts";
 
 const violation = (over: Partial<KicadViolation>): KicadViolation => ({
   type: "pin_not_connected",
@@ -51,5 +51,34 @@ describe("boardProblems", () => {
     const problems = boardProblems(drc);
     expect(problems.map((problem) => problem.key)).toEqual(["drc:0", "unconnected:0", "parity:0"]);
     expect(countProblems(problems)).toEqual({ errors: 2, warnings: 1 });
+  });
+});
+
+describe("fixRequest", () => {
+  it("asks the agent to fix problems, with the reviewer's own fix and the place", () => {
+    const [found] = boardProblems({
+      board: "b.kicad_pcb",
+      summary: { errors: 0, warnings: 1, byType: [] },
+      violations: [
+        violation({
+          type: "layout_decap_far",
+          severity: "warning",
+          description: "Decoupling capacitors are far from the pins they serve: C4 5.46 mm",
+          items: [],
+          fix: "move C4 next to U2.2",
+        }),
+      ],
+      unconnected: [],
+      schematicParity: [],
+      truncated: false,
+    } satisfies KicadDrcResult);
+    expect(found?.hint).toBe("move C4 next to U2.2");
+    const request = fixRequest("board.kicad_pro", [
+      ...(found ? [found] : []),
+      { key: "k", severity: "error", title: "Clearance", subject: "R1 · C2", x: 12.34, y: 5 },
+    ]);
+    expect(request).toContain("Fix these 2 problems in board.kicad_pro.");
+    expect(request).toContain("Suggested: move C4 next to U2.2");
+    expect(request).toContain("- error: Clearance [R1 · C2] at (12.3, 5.0) mm.");
   });
 });

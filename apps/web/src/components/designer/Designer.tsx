@@ -56,7 +56,7 @@ import { designMention, withMention, withRequest } from "./designMention.ts";
 import { currentStep, type DesignStep, designSteps } from "./designSteps.ts";
 import { PartSearch } from "./PartSearch";
 import { ProblemList } from "./ProblemList";
-import { boardProblems, countProblems, sheetProblems } from "./problems.ts";
+import { boardProblems, countProblems, fixRequest, sheetProblems } from "./problems.ts";
 import {
   DIFF_ADDED_COLOR,
   DIFF_REMOVED_COLOR,
@@ -880,6 +880,7 @@ function DesignerView(props: {
       errors: checked
         ? (checks.erc?.summary.errors ?? 0) + (checks.drc?.summary.errors ?? 0)
         : undefined,
+      score: checks.drc?.score,
     },
     project ?? "this design",
   );
@@ -1322,6 +1323,15 @@ function DesignerView(props: {
               <ProblemList
                 problems={problems}
                 activeKey={activeProblem}
+                score={scene.kind === "board" ? checks.drc?.score : undefined}
+                onFix={(chosen) => {
+                  const store = useComposerDraftStore.getState();
+                  const prompt = store.getComposerDraft(props.threadRef)?.prompt ?? "";
+                  store.setPrompt(
+                    props.threadRef,
+                    withRequest(prompt, fixRequest(project ?? "this design", chosen)),
+                  );
+                }}
                 truncated={
                   (scene.kind === "board" ? checks.drc?.truncated : checks.erc?.truncated) ?? false
                 }
