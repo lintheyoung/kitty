@@ -257,6 +257,11 @@ export const hardwareDesignAction = createEnvironmentRpcCommand(connectionAtomRu
   label: "environment-data:hardware:design-action",
   tag: WS_METHODS.hardwareDesignAction,
 });
+/** Tells the server what the designer shows, for the agent's next message. */
+export const hardwareDesignView = createEnvironmentRpcCommand(connectionAtomRuntime, {
+  label: "environment-data:hardware:design-view",
+  tag: WS_METHODS.hardwareDesignView,
+});
 /** Moves parts on the board and sets its outline; the same edits the agent's pcb_edit makes. */
 export const hardwareBoardEdit = createEnvironmentRpcCommand(connectionAtomRuntime, {
   label: "environment-data:hardware:board-edit",

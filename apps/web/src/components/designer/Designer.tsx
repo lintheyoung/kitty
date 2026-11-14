@@ -50,6 +50,7 @@ import { Input } from "../ui/input";
 import { BoardModelView } from "./BoardModelView";
 import { DesignCanvas } from "./DesignCanvas";
 import { designMention, withMention, withRequest } from "./designMention.ts";
+import { designerView, useDesignerViewReport } from "./designerView.ts";
 import { currentStep, type DesignStep, designSteps } from "./designSteps.ts";
 import { PartSearch } from "./PartSearch";
 import { ActivityLog } from "./ActivityLog";
@@ -881,6 +882,20 @@ function DesignerView(props: {
       score: checks.drc?.score,
     },
     project ?? "this design",
+  );
+  useDesignerViewReport(
+    { environmentId, threadId, projectId: props.projectId },
+    project
+      ? designerView({
+          project,
+          drawing: showModel ? "model" : scene?.kind === "board" ? "board" : "schematic",
+          file: showModel ? source?.board?.file : current?.file,
+          selection: selectedItem ? selection : undefined,
+          value: selectedItem?.value,
+          steps,
+          problems,
+        })
+      : undefined,
   );
   const openStep = (step: DesignStep) => {
     const kind = step.id === "schematic" ? "schematic" : "board";

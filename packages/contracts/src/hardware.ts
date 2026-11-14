@@ -502,6 +502,35 @@ export const HardwareDesignActionResult = Schema.Struct({
 });
 export type HardwareDesignActionResult = typeof HardwareDesignActionResult.Type;
 
+/** What the user has open in the designer, told to the agent with their next message. */
+export const DesignerView = Schema.Struct({
+  /** The design's folder, relative to the workspace. */
+  project: Schema.String,
+  drawing: Schema.Literals(["schematic", "board", "model"]),
+  /** The open drawing's file, relative to the workspace. */
+  file: Schema.optional(Schema.String),
+  selection: Schema.optional(
+    Schema.Struct({
+      ref: Schema.optional(Schema.String),
+      value: Schema.optional(Schema.String),
+      net: Schema.optional(Schema.String),
+    }),
+  ),
+  /** Where each design step stands, as the step bar shows it. */
+  steps: Schema.Array(Schema.String),
+  /** How many problems the checks list, and the first of them. */
+  problemCount: Schema.Int,
+  problems: Schema.Array(Schema.String),
+});
+export type DesignerView = typeof DesignerView.Type;
+
+export const HardwareDesignViewInput = Schema.Struct({
+  ...HardwareWorkspaceTarget,
+  /** Null when the designer closes. */
+  view: Schema.NullOr(DesignerView),
+});
+export type HardwareDesignViewInput = typeof HardwareDesignViewInput.Type;
+
 /** Change a design's schematic from the designer. */
 export const HardwareSchematicEditInput = Schema.Struct({
   ...HardwareWorkspaceTarget,

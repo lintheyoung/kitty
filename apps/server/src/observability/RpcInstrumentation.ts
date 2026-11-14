@@ -239,6 +239,7 @@ const RPC_AGGREGATES = {
   [WS_METHODS.hardwareBoardSync]: "hardware",
   [WS_METHODS.hardwareBoardAutoroute]: "hardware",
   [WS_METHODS.hardwareDesignAction]: "hardware",
+  [WS_METHODS.hardwareDesignView]: "hardware",
   [WS_METHODS.hardwareBoardEdit]: "hardware",
   [WS_METHODS.hardwareTestPlans]: "hardware",
   [WS_METHODS.hardwareTestCreate]: "hardware",

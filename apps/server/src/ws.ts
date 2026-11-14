@@ -201,6 +201,7 @@ import * as ServerBrowser from "./preview/ServerBrowser.ts";
 import * as DeviceService from "./device/DeviceService.ts";
 import * as HardwareService from "./hardware/HardwareService.ts";
 import * as JlcPartsService from "./hardware/JlcPartsService.ts";
+import { rememberDesignerView } from "./hardware/designerView.ts";
 import * as KicadService from "./hardware/KicadService.ts";
 import { createHardwareRepo } from "./hardware/newHardwareProject.ts";
 import { createBoardTest, listTestPlans, runBoardTests } from "./hardware/boardTestRunner.ts";
@@ -3468,6 +3469,13 @@ export const layerWsRpc = (
               kicadService.designAction({ path: input.path, action: input.action, workspaceRoot }),
             ),
             Effect.map((result) => ({ summary: [...result.summary] })),
+          ),
+        [WS_METHODS.hardwareDesignView]: (input) =>
+          requireHardwareWorkspace(input).pipe(
+            Effect.flatMap(() => DateTime.now),
+            Effect.map((now) =>
+              rememberDesignerView(input.threadId, input.view, DateTime.toEpochMillis(now)),
+            ),
           ),
         [WS_METHODS.hardwareBoardEdit]: (input) =>
           requireHardwareWorkspace(input).pipe(

@@ -42,6 +42,7 @@ import { layerRealGit } from "./ProviderTurnStartService.testkit.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ProviderAuthService from "../provider/ProviderAuthService.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import { rememberDesignerView } from "../hardware/designerView.ts";
 import * as ContextHandoffService from "./ContextHandoffService.ts";
 import { withInlineContext } from "./ContextHandoffDelivery.ts";
 import * as EventSink from "./EventSink.ts";
@@ -1235,6 +1236,38 @@ effectIt.effect(
       ]);
       expect(JSON.stringify(harness.events)).not.toContain("private git diagnostic");
     }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
+);
+
+effectIt.effect("tells the agent what the user's designer shows, with their message", () =>
+  Effect.gen(function* () {
+    const harness = makeLocalCommandHarness({
+      text: "Move this closer to U1",
+      sideChat: { contextRun: "delivered" },
+    });
+    const threadId = "thread-native-account-command";
+    rememberDesignerView(
+      threadId,
+      {
+        project: "hardware/kicad",
+        drawing: "board",
+        selection: { ref: "C3", value: "100n" },
+        steps: [],
+        problemCount: 0,
+        problems: [],
+      },
+      0,
+    );
+
+    yield* harness.start.pipe(
+      Effect.ensuring(Effect.sync(() => rememberDesignerView(threadId, null, 0))),
+    );
+
+    const sent = harness.startTurn.mock.calls[0]?.[0].message.text ?? "";
+    expect(sent.startsWith("Move this closer to U1\n\n<designer_view>")).toBe(true);
+    expect(sent).toContain("Selected: C3 (100n).");
+    // A turn with nothing else to deliver takes its text from the run input.
+    expect(harness.startRootRun.mock.calls[0]?.[0].message.text).toBe(sent);
+  }),
 );
 
 effectIt.effect("recovers an abandoned failed turn before continuing its native conversation", () =>

@@ -326,6 +326,7 @@ import {
   HardwareProjectsResult,
   HardwareDesignActionInput,
   HardwareDesignActionResult,
+  HardwareDesignViewInput,
   HardwareDesignInput,
   HardwareJlcImportInput,
   HardwareSchematicEditInput,
@@ -560,6 +561,7 @@ export const WS_METHODS = {
   hardwareBoardSync: "hardware.boardSync",
   hardwareBoardAutoroute: "hardware.boardAutoroute",
   hardwareDesignAction: "hardware.designAction",
+  hardwareDesignView: "hardware.designView",
   hardwareBoardEdit: "hardware.boardEdit",
   hardwareBom: "hardware.bom",
   hardwareFabExport: "hardware.fabExport",
@@ -1949,6 +1951,12 @@ const WsHardwareDesignActionRpc = Rpc.make(WS_METHODS.hardwareDesignAction, {
   error: Schema.Union([HardwareToolError, EnvironmentAuthorizationError]),
 });
 
+const WsHardwareDesignViewRpc = Rpc.make(WS_METHODS.hardwareDesignView, {
+  payload: HardwareDesignViewInput,
+  success: Schema.Void,
+  error: Schema.Union([HardwareToolError, EnvironmentAuthorizationError]),
+});
+
 const WsHardwareBoardEditRpc = Rpc.make(WS_METHODS.hardwareBoardEdit, {
   payload: HardwareBoardEditInput,
   success: BoardEditResult,
@@ -2495,6 +2503,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsHardwareBoardSyncRpc,
   WsHardwareBoardAutorouteRpc,
   WsHardwareDesignActionRpc,
+  WsHardwareDesignViewRpc,
   WsHardwareBoardEditRpc,
   WsHardwareTestPlansRpc,
   WsHardwareTestCreateRpc,

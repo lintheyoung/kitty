@@ -34,6 +34,7 @@ import * as ServerSettings from "../serverSettings.ts";
 import { makeIsManagedWorktreePath } from "../worktreesDirectory.ts";
 import * as EventSink from "./EventSink.ts";
 import * as ProviderUsageAnalytics from "../telemetry/ProviderUsageAnalytics.ts";
+import { designerViewNote } from "../hardware/designerView.ts";
 import * as ContextHandoffService from "./ContextHandoffService.ts";
 import { isActiveRun } from "./CommandPolicy.ts";
 import {
@@ -850,6 +851,12 @@ export const layer: Layer.Layer<
       // Codex and Claude parse /goal from the prompt, so it goes verbatim and history waits a turn.
       const goalDriver = session.driver === "codex" || session.driver === "claudeAgent";
       const goalCommand = goalDriver && parseGoalCommand(message) !== null;
+      // What the user's designer shows rides on their own messages, not on commands.
+      const designerView =
+        message.createdBy !== "user" || message.text.trimStart().startsWith("/")
+          ? undefined
+          : designerViewNote(input.threadId, DateTime.toEpochMillis(yield* DateTime.now));
+      const promptText = designerView ? `${userText}\n\n${designerView}` : userText;
       // The provider turn marks cancellation work delivered; restart continuations use their own text or resume natively.
       const noteContinuation = isRestartNoteContinuation(
         run,
@@ -1614,7 +1621,9 @@ export const layer: Layer.Layer<
             ...(noteContinuation ? promptedInput : turnInput),
             message: {
               ...turnInput.message,
-              text: goalCommand ? userText : withInlineContext(context, userText),
+              text: goalCommand
+                ? userText
+                : withInlineContext(context, compact ? userText : promptText),
             },
           }).pipe(
             // Clear pending handoff markers for refused prompts so the next turn retains the native session.
@@ -1713,7 +1722,7 @@ export const layer: Layer.Layer<
         loadRunInterruptReason: runControls.loadRunInterruptReason,
         message: {
           messageId: message.id,
-          text: userText,
+          text: promptText,
           attachments: message.attachments,
           createdBy: message.createdBy,
           creationSource: message.creationSource,
