@@ -160,3 +160,8 @@ export function parseLayoutReview(report: string): LayoutReview {
   });
   return { ...(typeof score === "number" ? { score } : {}), points };
 }
+
+/** The pictures a report names, as the engine saved them under the design folder. */
+export const enginePictures = (report: string): ReadonlyArray<string> => [
+  ...new Set(report.match(/copper-out\/[^"\\]+?\.png/g) ?? []),
+];

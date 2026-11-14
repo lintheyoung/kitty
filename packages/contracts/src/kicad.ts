@@ -590,6 +590,15 @@ export const DesignEngineResult = Schema.Struct({
   summary: Schema.String,
   /** The numbers and findings behind it, as JSON text; positions are in millimetres. */
   report: Schema.String,
+  /** Pictures this call saved, relative to the workspace; read a file to look at it. */
+  images: Schema.Array(Schema.String),
+  /** Where the design stands now: parts drawn, placed, tracks, what is unrouted. */
+  state: Schema.String,
+  /**
+   * What the user changed by hand since your last change, in the designer or in KiCad.
+   * Respect it: do not undo it without asking.
+   */
+  userChanges: Schema.Array(Schema.String),
 });
 export type DesignEngineResult = typeof DesignEngineResult.Type;
 

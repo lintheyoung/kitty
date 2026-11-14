@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { parseEngineReply, parseLayoutReview } from "./boardEngine.ts";
+import { enginePictures, parseEngineReply, parseLayoutReview } from "./boardEngine.ts";
 
 describe("the PCB engine's replies", () => {
   it("reads the summary and report from the runner's last line", () => {
@@ -45,5 +45,14 @@ describe("the PCB engine's replies", () => {
     });
     expect(parseLayoutReview("not json")).toEqual({ points: [] });
     expect(parseLayoutReview('{"tracks":3}')).toEqual({ points: [] });
+  });
+
+  it("finds the pictures a report names", () => {
+    expect(
+      enginePictures(
+        '{"image":"copper-out/render/pcb-top.png","images":["copper-out/a.png","copper-out/render/pcb-top.png"]}',
+      ),
+    ).toEqual(["copper-out/render/pcb-top.png", "copper-out/a.png"]);
+    expect(enginePictures('{"routed":3}')).toEqual([]);
   });
 });

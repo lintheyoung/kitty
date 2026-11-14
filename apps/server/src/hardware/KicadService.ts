@@ -1,5 +1,6 @@
 import {
   type BoardEditInput,
+  type DesignEngineResult,
   type BoardEditResult,
   type BoardAutorouteInput,
   type BoardAutorouteResult,
@@ -98,9 +99,11 @@ import {
   ENGINE_RUNNER,
   type LayoutReview,
   engineArguments,
+  enginePictures,
   parseEngineReply,
   parseLayoutReview,
 } from "./boardEngine.ts";
+import { describeDesignChange, describeDesignState } from "./designChange.ts";
 import { jlcBomCsv, jlcCplCsv, orderBlockers } from "./jlcFiles.ts";
 import { BOARD_EDIT_SCRIPT, boardEditJob, boardRouting, parseBoardReport } from "./boardEdit.ts";
 import {
@@ -222,10 +225,7 @@ export class KicadService extends Context.Service<
       readonly tool: string;
       readonly arguments: Readonly<Record<string, unknown>>;
       readonly by?: SchematicChangeAuthor;
-    }) => Effect.Effect<
-      { readonly design: string; readonly summary: string; readonly report: string },
-      HardwareToolError
-    >;
+    }) => Effect.Effect<DesignEngineResult, HardwareToolError>;
     /** The layout review's score and weak points for a board. */
     readonly layoutReview: (input: {
       readonly workspaceRoot: string;
@@ -716,6 +716,34 @@ atexit.register(_kitty_leave)
     return yield* failure("toolchain_missing", ENGINE_MISSING);
   });
 
+  /**
+   * Logs what changed in the design's files since Kitty last wrote or read them: edits made
+   * in KiCad or by a command count as the user's, so the agent is told about them.
+   */
+  const noteOutsideChanges = Effect.fn("KicadService.noteOutsideChanges")(function* (
+    project: string,
+  ) {
+    const directory = path.dirname(project);
+    for (const kind of ["schematic", "board"] as const) {
+      const extension = kind === "board" ? ".kicad_pcb" : ".kicad_sch";
+      const file = project.replace(/\.kicad_pro$/, extension);
+      const onDisk = yield* fs.readFileString(file).pipe(Effect.option);
+      if (Option.isNone(onDisk)) continue;
+      const known = histories.get(file);
+      if (known && known.current !== onDisk.value) {
+        const lines = describeDesignChange(kind, known.current, onDisk.value);
+        if (lines.length > 0) {
+          yield* recordChange(
+            directory,
+            "user",
+            lines.map((line) => `Outside Kitty, on the ${kind}: ${line}`),
+          );
+        }
+      }
+      historyOf(file, onDisk.value);
+    }
+  });
+
   /** Runs one Copper tool on a design; what it changes goes into the undo history and the log. */
   const designEngine = Effect.fn("KicadService.designEngine")(function* (input: {
     readonly workspaceRoot: string;
@@ -752,6 +780,9 @@ atexit.register(_kitty_leave)
           project.replace(/\.kicad_pro$/, ".kicad_pcb"),
         ];
     const read = (file: string) => fs.readFileString(file).pipe(Effect.option);
+    if (!creating) yield* noteOutsideChanges(project);
+    // Read before this call is logged, so the agent hears of the user's edits exactly here.
+    const userChanges = creating ? [] : userChangesSinceAgent(yield* readChanges(directory));
     const before = yield* Effect.forEach(files, read);
     const run = yield* Effect.scoped(
       Effect.gen(function* () {
@@ -791,10 +822,24 @@ atexit.register(_kitty_leave)
       changed = true;
     }
     if (changed) yield* recordChange(directory, input.by ?? "agent", [reply.summary]);
+    const text = (index: number) => Option.getOrUndefined(after[index] ?? Option.none<string>());
+    const board = text(1);
+    const unrouted =
+      board === undefined
+        ? undefined
+        : yield* parseOrFail(() => boardRouting(board), "board").pipe(
+            Effect.map((routing) => routing.unrouted),
+            Effect.orElseSucceed(() => undefined),
+          );
     return {
       design: path.relative(input.workspaceRoot, creating ? directory : project),
       summary: reply.summary,
       report: reply.report,
+      images: enginePictures(reply.report).map((picture) =>
+        path.relative(input.workspaceRoot, path.join(directory, picture)),
+      ),
+      state: describeDesignState(text(0), board, unrouted),
+      userChanges: [...userChanges],
     };
   });
 
@@ -1652,6 +1697,9 @@ atexit.register(_kitty_leave)
     if (Option.isNone(schematic) && Option.isNone(board)) {
       return yield* failure("invalid_path", `No KiCad schematic or board for ${input.path}.`);
     }
+    // The designer reloads on every save, so an edit made in KiCad is logged within a second.
+    const known = Option.getOrUndefined(schematic)?.file ?? Option.getOrUndefined(board)?.file;
+    if (known) yield* noteOutsideChanges(known.replace(/\.kicad_(sch|pcb)$/, ".kicad_pro"));
     let budget = MAX_PREVIEW_BYTES;
     let omitted = 0;
     const load = Effect.fn("KicadService.designSource.load")(function* (
@@ -1908,6 +1956,7 @@ atexit.register(_kitty_leave)
     input: InWorkspace<SchematicChangesInput>,
   ) {
     const { file, relative } = yield* resolveDesign(input.workspaceRoot, input.path, ".kicad_sch");
+    yield* noteOutsideChanges(file.replace(/\.kicad_sch$/, ".kicad_pro"));
     const changes = yield* readChanges(path.dirname(file));
     return {
       schematic: relative,
