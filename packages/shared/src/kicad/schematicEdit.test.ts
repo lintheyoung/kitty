@@ -334,6 +334,44 @@ describe("schematic edits", () => {
     expect(twice.placed).toEqual(tidied.placed);
   });
 
+  it("hangs a two-pin part on the pin of a big part when the net is theirs alone", () => {
+    const drawn = applySchematicEdits(
+      BLANK,
+      [
+        {
+          op: "place",
+          symbol: "jlc:SW",
+          group: "USB",
+          nets: { "1": "CC1", "2": "DP", "3": "GND", "4": "DN" },
+        },
+        { op: "place", symbol: "jlc:R", group: "USB", nets: { "1": "CC1", "2": "GND" } },
+        // DP goes on to another block, so its pin keeps a label of its own.
+        { op: "place", symbol: "jlc:R", group: "MCU", nets: { "1": "DP", "2": "DN" } },
+      ],
+      context(),
+    );
+    const tidied = applySchematicEdits(drawn.source, [{ op: "tidy" }], context());
+    expect(netsOf(tidied.source)).toEqual(netsOf(drawn.source));
+    const count = (text: string, token: string) => text.split(token).length - 1;
+    // One wire runs from the pin to the resistor, so the net is named once.
+    expect(count(tidied.source, '(label "CC1"')).toBe(1);
+    expect(count(tidied.source, '(label "DP"')).toBe(2);
+    const at = Object.fromEntries(tidied.placed.map((placed) => [placed.reference, placed]));
+    // The resistor lies in line with the pin, on the side the pin points to.
+    expect(at.R1?.rotation).toBe(180);
+    expect(at.R1?.at.x).toBeLessThan(at.SW1?.at.x ?? 0);
+    expect(at.R1?.at.y).toBeCloseTo((at.SW1?.at.y ?? 0) - 1.27);
+    const twice = applySchematicEdits(tidied.source, [{ op: "tidy" }], context());
+    expect(twice.placed).toEqual(tidied.placed);
+    // Moving the resistor away keeps both on the net.
+    const moved = applySchematicEdits(
+      tidied.source,
+      [{ op: "move", reference: "R1", by: { x: 0, y: 30.48 } }],
+      context(),
+    );
+    expect(netsOf(moved.source)).toEqual(netsOf(drawn.source));
+  });
+
   it("fills the sheet in rows when columns would not fit, clear of the title block", () => {
     const names = ["USB", "Power", "MCU", "Buttons", "LED", "Sensor", "Fan"];
     const drawn = applySchematicEdits(

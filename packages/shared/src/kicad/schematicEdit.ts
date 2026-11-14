@@ -1328,6 +1328,15 @@ function tidy(session: Session, placed: Array<PlacedPart>): ReadonlyArray<string
       grown = true;
     }
   }
+  // How many pins each named net has on the whole sheet.
+  const pinsOn = new Map<string, number>();
+  for (const part of sheetSymbols(session.root)) {
+    if (referenceOf(part).startsWith("#")) continue;
+    for (const pin of pinsOfPart(session, part)) {
+      const net = joined(pin.at)?.net;
+      if (net) pinsOn.set(net, (pinsOn.get(net) ?? 0) + 1);
+    }
+  }
   for (const [name] of kept) blocks.delete(name);
   if (blocks.size === 0) {
     throw refuse(
@@ -1372,6 +1381,24 @@ function tidy(session: Session, placed: Array<PlacedPart>): ReadonlyArray<string
   // Each block on its own: big parts in a column, the rest in rows to their right.
   const laid = [...blocks].map(([name, members]) => {
     const netsOf = (member: Member) => loose.get(member.part)?.nets ?? {};
+    // A two-pin part whose net has only it and one pin of a big part hangs on that pin.
+    const hung = new Map<Member, Array<{ link: Link; net: string }>>();
+    const hangs = new Set<Member>();
+    for (const member of members) {
+      const link =
+        member.big || member.pins.length !== 2 ? undefined : linkOf(member, netsOf(member));
+      const net = link?.nets.find((name) => kindOf(session, name) === 1 && pinsOn.get(name) === 2);
+      const host = members.find(
+        (other) =>
+          other.big &&
+          net !== undefined &&
+          Object.values(netsOf(other)).includes(net) &&
+          // A big part that stands in a ladder itself is not drawn on its own.
+          !linkOf(other, netsOf(other)),
+      );
+      if (!link || !net || !host) continue;
+      hung.set(host, [...(hung.get(host) ?? []), { link, net }]);
+    }
     const alone = (member: Member): Piece & { readonly first: string } => {
       const mirror = mirrorOf(member.part);
       const now = num(find(member.part, "at")?.[3]);
@@ -1379,32 +1406,87 @@ function tidy(session: Session, placed: Array<PlacedPart>): ReadonlyArray<string
         ? now
         : standing(session, member.library, mirror, netsOf(member), now);
       const box = footprintBox(member.library, rotation, mirror, netsOf(member));
+      const pins = placedPins(member.library, { x: 0, y: 0 }, rotation, mirror);
+      const beside: Array<{ spot: Spot; box: Box; wire: readonly [Point, Point] }> = [];
+      for (const { link, net } of hung.get(member) ?? []) {
+        const pin = pins.find((entry) => netsOf(member)[entry.number] === net);
+        const side = pin?.out.x ?? 0;
+        if (!pin || side === 0) continue;
+        const small = link.member;
+        const flip = mirrorOf(small.part);
+        const number = Object.keys(link.on).find((entry) => link.on[entry] === net);
+        const turned = [0, 90, 180, 270].flatMap((turn) => {
+          const near = placedPins(small.library, { x: 0, y: 0 }, turn, flip).find(
+            (entry) => entry.number === number && entry.out.x === -side,
+          );
+          return near ? [{ turn, near }] : [];
+        })[0];
+        if (!turned || !number) continue;
+        // Past the labels of the pins above and below, so nothing is written over.
+        const x = side * onGrid((side > 0 ? box.maxX : -box.minX) + LEAD);
+        const at = { x: x - turned.near.at.x, y: pin.at.y - turned.near.at.y };
+        const rest = Object.fromEntries(Object.entries(link.on).filter(([key]) => key !== number));
+        const taken = shifted(footprintBox(small.library, turned.turn, flip, rest), at);
+        const clear = beside.every(
+          (other) =>
+            taken.minX >= other.box.maxX ||
+            taken.maxX <= other.box.minX ||
+            taken.minY >= other.box.maxY + LEAD ||
+            taken.maxY + LEAD <= other.box.minY,
+        );
+        if (!clear) continue;
+        hangs.add(small);
+        beside.push({
+          spot: { member: small, rotation: turned.turn, ...at, wired: new Set([number]) },
+          box: taken,
+          wire: [
+            { x: pin.at.x + side * STUB, y: pin.at.y },
+            { x, y: pin.at.y },
+          ],
+        });
+      }
+      const minX = Math.min(box.minX, ...beside.map((entry) => entry.box.minX));
+      const minY = Math.min(box.minY, ...beside.map((entry) => entry.box.minY));
+      const maxX = Math.max(box.maxX, ...beside.map((entry) => entry.box.maxX));
+      const maxY = Math.max(box.maxY, ...beside.map((entry) => entry.box.maxY));
+      const moved = (point: Point) => ({ x: point.x - minX, y: point.y - minY });
       return {
         first: referenceOf(member.part),
-        width: box.maxX - box.minX,
-        height: box.maxY - box.minY,
-        spots: [{ member, rotation, x: -box.minX, y: -box.minY, wired: new Set() }],
-        wires: [],
+        width: maxX - minX,
+        height: maxY - minY,
+        spots: [
+          { member, rotation, ...moved({ x: 0, y: 0 }), wired: new Set() },
+          ...beside.map(({ spot }) => ({ ...spot, ...moved(spot) })),
+        ],
+        wires: beside.map(({ wire }) => [moved(wire[0]), moved(wire[1])] as const),
         junctions: [],
         names: [],
       };
     };
+    // Big parts first: what hangs on them is not drawn again among the small parts.
+    const bigPieces = new Map(
+      members.filter((member) => member.big).map((member) => [member, alone(member)]),
+    );
     const byReference = (a: { first: string }, b: { first: string }) => naturally(a.first, b.first);
     const groups = ladders(
       session,
-      members.flatMap((member) => linkOf(member, netsOf(member)) ?? []),
+      members.flatMap((member) =>
+        hangs.has(member) ? [] : (linkOf(member, netsOf(member)) ?? []),
+      ),
     );
     const drawn = new Set(groups.flat().map((link) => link.member));
     const big = members
       .filter((member) => member.big && !drawn.has(member))
       .sort((a, b) => b.pins.length - a.pins.length)
-      .map(alone);
+      .flatMap((member) => bigPieces.get(member) ?? []);
     const small = [
       ...groups.map((group) => ({
         ...ladder(session, group),
         first: group.map((link) => referenceOf(link.member.part)).sort(naturally)[0] ?? "",
       })),
-      ...members.filter((member) => !member.big && !drawn.has(member)).map(alone),
+      ...members
+        .filter((member) => !member.big && !drawn.has(member) && !hangs.has(member))
+        .map(alone),
     ].sort(byReference);
 
     const pieces: Array<{ piece: Piece; x: number; y: number }> = [];
