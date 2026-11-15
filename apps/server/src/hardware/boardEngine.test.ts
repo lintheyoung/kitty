@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { enginePictures, parseEngineReply, parseLayoutReview } from "./boardEngine.ts";
+import {
+  chosenEngineCommit,
+  engineChoiceText,
+  enginePictures,
+  parseEngineNews,
+  parseEngineReply,
+  parseLayoutReview,
+} from "./boardEngine.ts";
 
 describe("the PCB engine's replies", () => {
   it("reads the summary and report from the runner's last line", () => {
@@ -54,5 +61,48 @@ describe("the PCB engine's replies", () => {
       ),
     ).toEqual(["copper-out/render/pcb-top.png", "copper-out/a.png"]);
     expect(enginePictures('{"routed":3}')).toEqual([]);
+  });
+});
+
+describe("parseEngineNews", () => {
+  const sha = (letter: string) => letter.repeat(40);
+
+  it("gives the newest commit and the first line of each new one, newest first", () => {
+    const news = parseEngineNews(
+      JSON.stringify({
+        ahead_by: 2,
+        commits: [
+          { sha: sha("a"), commit: { message: "Route diff pairs\n\nlong text" } },
+          { sha: sha("b"), commit: { message: "Fix pour clearance" } },
+        ],
+      }),
+    );
+    expect(news).toEqual({
+      latest: sha("b"),
+      behind: 2,
+      notes: ["Fix pour clearance", "Route diff pairs"],
+    });
+  });
+
+  it("says nothing is new when the commit in use is the newest", () => {
+    expect(parseEngineNews(JSON.stringify({ ahead_by: 0, commits: [] }))).toEqual({
+      behind: 0,
+      notes: [],
+    });
+  });
+
+  it("does not take an error page for news", () => {
+    expect(parseEngineNews('{"message":"API rate limit exceeded"}')).toBeUndefined();
+    expect(parseEngineNews("<html>")).toBeUndefined();
+  });
+});
+
+describe("chosenEngineCommit", () => {
+  it("reads back the commit it wrote and ignores anything that is not one", () => {
+    const commit = "0123456789abcdef0123456789abcdef01234567";
+    expect(chosenEngineCommit(engineChoiceText(commit))).toBe(commit);
+    expect(chosenEngineCommit('{"commit":"main; rm -rf"}')).toBeUndefined();
+    expect(chosenEngineCommit("not json")).toBeUndefined();
+    expect(chosenEngineCommit(undefined)).toBeUndefined();
   });
 });

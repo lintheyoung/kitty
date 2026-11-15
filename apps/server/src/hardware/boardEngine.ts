@@ -1,8 +1,65 @@
 /** Copper, the KiCad engine Kitty runs for the design, from the schematic to the fab files. */
 
-/** The Copper commit Kitty was tested with; a newer one is taken only by changing this. */
+/** The Copper commit Kitty was tested with; the user may move to a newer one from the designer. */
 export const COPPER_COMMIT = "303964c8b70cb0f99b1635efcc681ec83d237c3c";
-export const COPPER_ARCHIVE_URL = `https://codeload.github.com/claynicholson/copper-kicad-mcp/tar.gz/${COPPER_COMMIT}`;
+const COPPER_REPOSITORY = "claynicholson/copper-kicad-mcp";
+export const COPPER_PAGE = `https://github.com/${COPPER_REPOSITORY}`;
+export const copperArchiveUrl = (commit: string) =>
+  `https://codeload.github.com/${COPPER_REPOSITORY}/tar.gz/${commit}`;
+/** GitHub's list of what the repository has that this commit does not. */
+export const copperCompareUrl = (commit: string) =>
+  `https://api.github.com/repos/${COPPER_REPOSITORY}/compare/${commit}...HEAD`;
+/** The user's choice of a newer Copper, kept under Copper's own folder. */
+export const COPPER_CHOICE_FILE = "engine.json";
+const COMMIT = /^[0-9a-f]{40}$/;
+const NOTES_SHOWN = 8;
+
+/** The commit the user moved to, read from the choice file; none when it names no commit. */
+export function chosenEngineCommit(text: string | undefined): string | undefined {
+  if (!text) return undefined;
+  try {
+    const commit = (JSON.parse(text) as { commit?: unknown }).commit;
+    return typeof commit === "string" && COMMIT.test(commit) ? commit : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export const engineChoiceText = (commit: string) => `${JSON.stringify({ commit }, null, 2)}\n`;
+
+export interface EngineNews {
+  /** The newest commit of Copper; absent when the one in use is the newest. */
+  readonly latest?: string;
+  readonly behind: number;
+  /** The first line of each new commit, newest first. */
+  readonly notes: ReadonlyArray<string>;
+}
+
+/** What GitHub's comparison says is new; none when the answer is not a comparison. */
+export function parseEngineNews(text: string): EngineNews | undefined {
+  try {
+    const parsed = JSON.parse(text) as { ahead_by?: unknown; commits?: unknown };
+    if (typeof parsed.ahead_by !== "number" || !Array.isArray(parsed.commits)) return undefined;
+    const commits = (
+      parsed.commits as ReadonlyArray<{ sha?: unknown; commit?: { message?: unknown } }>
+    )
+      .filter((entry) => typeof entry.sha === "string" && COMMIT.test(entry.sha))
+      .toReversed();
+    const latest = commits[0]?.sha;
+    if (parsed.ahead_by === 0 || typeof latest !== "string") return { behind: 0, notes: [] };
+    return {
+      latest,
+      behind: parsed.ahead_by,
+      notes: commits.slice(0, NOTES_SHOWN).flatMap((entry) => {
+        const message = entry.commit?.message;
+        const line = typeof message === "string" ? message.split("\n")[0]?.trim() : undefined;
+        return line ? [line.slice(0, 160)] : [];
+      }),
+    };
+  } catch {
+    return undefined;
+  }
+}
 /** Under the user's home: the engine's source, its Python, and its own cache and settings. */
 export const COPPER_FOLDER = ".kitty/tools/copper";
 export const COPPER_HOME_FOLDER = ".kitty/copper";

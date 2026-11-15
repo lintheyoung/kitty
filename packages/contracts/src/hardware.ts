@@ -531,6 +531,31 @@ export const HardwareDesignViewInput = Schema.Struct({
 });
 export type HardwareDesignViewInput = typeof HardwareDesignViewInput.Type;
 
+/** Ask about Copper's version, move to its newest, or go back to the one Kitty was tested with. */
+export const HardwareEngineUpdateInput = Schema.Struct({
+  ...HardwareWorkspaceTarget,
+  action: Schema.Literals(["check", "update", "reset"]),
+});
+export type HardwareEngineUpdateInput = typeof HardwareEngineUpdateInput.Type;
+
+export const HardwareEngineUpdateResult = Schema.Struct({
+  /** The Copper commit in use. */
+  current: Schema.String,
+  /** False when the user has moved off the commit Kitty was tested with. */
+  tested: Schema.Boolean,
+  /** The newest commit, when it is not the one in use. */
+  latest: Schema.optional(Schema.String),
+  /** How many commits newer the newest is. */
+  behind: Schema.Int,
+  /** The first line of each new commit, newest first. */
+  notes: Schema.Array(Schema.String),
+  /** Where to read about the changes. */
+  url: Schema.String,
+  /** Why the check could not be made, when it could not. */
+  problem: Schema.optional(Schema.String),
+});
+export type HardwareEngineUpdateResult = typeof HardwareEngineUpdateResult.Type;
+
 /** Change a design's schematic from the designer. */
 export const HardwareSchematicEditInput = Schema.Struct({
   ...HardwareWorkspaceTarget,

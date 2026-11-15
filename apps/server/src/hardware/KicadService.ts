@@ -7,6 +7,7 @@ import {
   type BoardSyncInput,
   type BoardSyncResult,
   HardwareToolError,
+  type HardwareEngineUpdateResult,
   type KicadBomInput,
   type KicadBomResult,
   type KicadDrcInput,
@@ -88,8 +89,15 @@ import {
   pickFreeroutingJar,
 } from "./boardAutoroute.ts";
 import {
-  COPPER_ARCHIVE_URL,
+  COPPER_CHOICE_FILE,
   COPPER_COMMIT,
+  COPPER_PAGE,
+  chosenEngineCommit,
+  copperArchiveUrl,
+  copperCompareUrl,
+  engineChoiceText,
+  type EngineNews,
+  parseEngineNews,
   COPPER_FOLDER,
   COPPER_HOME_FOLDER,
   ENGINE_MISSING,
@@ -232,6 +240,10 @@ export class KicadService extends Context.Service<
       readonly path: string;
       readonly action: "tidy" | "sync" | "pour" | "order";
     }) => Effect.Effect<{ readonly summary: ReadonlyArray<string> }, HardwareToolError>;
+    /** Copper's version: whether a newer one is out, and moving to it or back. */
+    readonly engineUpdate: (
+      action: "check" | "update" | "reset",
+    ) => Effect.Effect<HardwareEngineUpdateResult, HardwareToolError>;
     /** The layout review's score and weak points for a board. */
     readonly layoutReview: (input: {
       readonly workspaceRoot: string;
@@ -645,11 +657,20 @@ atexit.register(_kitty_leave)
 
   /** The PCB engine's source and a Python that runs it, fetched and set up on first use. */
   let knownEngine: { readonly python: string; readonly source: string } | undefined;
+  const engineChoice = Effect.fn("KicadService.engineChoice")(function* () {
+    return path.join(yield* HostProcess.HomeDirectory, COPPER_HOME_FOLDER, COPPER_CHOICE_FILE);
+  });
+  /** The Copper commit in use: the user's newer choice, else the one Kitty was tested with. */
+  const engineCommit = Effect.fn("KicadService.engineCommit")(function* () {
+    const text = yield* fs.readFileString(yield* engineChoice()).pipe(Effect.option);
+    return chosenEngineCommit(Option.getOrUndefined(text)) ?? COPPER_COMMIT;
+  });
   const findEngine = Effect.fn("KicadService.findEngine")(function* () {
     if (knownEngine) return knownEngine;
     const home = yield* HostProcess.HomeDirectory;
     const root = path.join(home, COPPER_FOLDER);
-    const checkout = path.join(root, COPPER_COMMIT);
+    const commit = yield* engineCommit();
+    const checkout = path.join(root, commit);
     const source = path.join(checkout, "src");
     const io = <A, E extends { readonly message: string }, R>(effect: Effect.Effect<A, E, R>) =>
       effect.pipe(Effect.mapError((cause) => failure("command_failed", cause.message)));
@@ -683,10 +704,10 @@ atexit.register(_kitty_leave)
       .pipe(Effect.orElseSucceed(() => false));
     if (!(yield* present)) {
       yield* io(fs.makeDirectory(checkout, { recursive: true }));
-      const archive = path.join(root, `${COPPER_COMMIT}.tar.gz`);
+      const archive = path.join(root, `${commit}.tar.gz`);
       yield* must(
         "curl",
-        ["-fsSL", "--retry", "2", "-o", archive, COPPER_ARCHIVE_URL],
+        ["-fsSL", "--retry", "2", "-o", archive, copperArchiveUrl(commit)],
         "Could not download the PCB engine. Check the network and try again",
       );
       yield* must(
@@ -847,6 +868,109 @@ atexit.register(_kitty_leave)
       state: describeDesignState(text(0), board, unrouted),
       userChanges: [...userChanges],
     };
+  });
+
+  const NEWS_LIFETIME_MS = 6 * 60 * 60 * 1000;
+  let knownNews:
+    | { readonly commit: string; readonly at: number; readonly news: EngineNews }
+    | undefined;
+  /** Runs Copper's own status tool: the proof that a version of it starts here. */
+  const engineStarts = Effect.fn("KicadService.engineStarts")(function* () {
+    const engine = yield* findEngine();
+    const home = yield* HostProcess.HomeDirectory;
+    const run = yield* Effect.scoped(
+      Effect.gen(function* () {
+        const temp = yield* fs.makeTempDirectoryScoped({ prefix: "kitty-engine-" });
+        const runner = path.join(temp, "runner.py");
+        yield* fs.writeFileString(runner, ENGINE_RUNNER);
+        return yield* processRunner.run({
+          command: engine.python,
+          args: ["-I", runner, engine.source, "", "copper_status", "{}"],
+          cwd: temp,
+          env: { COPPER_HOME: path.join(home, COPPER_HOME_FOLDER) },
+          timeout: "2 minutes",
+          timeoutBehavior: "timedOutResult",
+        });
+      }),
+    ).pipe(Effect.mapError((cause) => failure("command_failed", cause.message)));
+    const reply = parseEngineReply(run.stdout);
+    if (!reply || "error" in reply) {
+      return yield* failure(
+        "command_failed",
+        reply ? reply.error : logTail(`${run.stdout}\n${run.stderr}`, 6),
+      );
+    }
+  });
+  /** Whether a newer Copper is out, and moving to it or back to the tested one. */
+  const engineUpdate = Effect.fn("KicadService.engineUpdate")(function* (
+    action: "check" | "update" | "reset",
+  ) {
+    const choice = yield* engineChoice();
+    const use = Effect.fn(function* (commit: string | undefined) {
+      if (commit === undefined) yield* fs.remove(choice).pipe(Effect.ignore);
+      else {
+        yield* fs.makeDirectory(path.dirname(choice), { recursive: true }).pipe(
+          Effect.andThen(fs.writeFileString(choice, engineChoiceText(commit))),
+          Effect.mapError((cause) => failure("command_failed", cause.message)),
+        );
+      }
+      knownEngine = undefined;
+      knownNews = undefined;
+    });
+    if (action === "reset") yield* use(undefined);
+    const current = yield* engineCommit();
+    const now = DateTime.toEpochMillis(yield* DateTime.now);
+    const cached =
+      action === "check" && knownNews?.commit === current && now - knownNews.at < NEWS_LIFETIME_MS
+        ? knownNews.news
+        : undefined;
+    const asked =
+      cached ??
+      (yield* processRunner
+        .run({
+          command: "curl",
+          args: [
+            "-fsSL",
+            "--max-time",
+            "20",
+            "-H",
+            "Accept: application/vnd.github+json",
+            "-H",
+            "User-Agent: kitty",
+            copperCompareUrl(current),
+          ],
+          timeout: "30 seconds",
+          maxOutputBytes: 4 * 1024 * 1024,
+          timeoutBehavior: "timedOutResult",
+        })
+        .pipe(
+          Effect.map((run) => (run.code === 0 ? parseEngineNews(run.stdout) : undefined)),
+          Effect.orElseSucceed(() => undefined),
+        ));
+    if (asked) knownNews = { commit: current, at: now, news: asked };
+    const report = (commit: string, news: EngineNews | undefined, problem?: string) => ({
+      current: commit,
+      tested: commit === COPPER_COMMIT,
+      ...(news?.latest ? { latest: news.latest } : {}),
+      behind: news?.behind ?? 0,
+      notes: [...(news?.notes ?? [])],
+      url: news?.latest ? `${COPPER_PAGE}/compare/${commit}...${news.latest}` : COPPER_PAGE,
+      ...(problem ? { problem } : {}),
+    });
+    if (!asked)
+      return report(current, undefined, "Could not reach GitHub to look for a newer Copper.");
+    if (action !== "update" || !asked.latest) return report(current, asked);
+    // The newer Copper must start before it replaces the one in use.
+    yield* use(asked.latest);
+    const started = yield* engineStarts().pipe(Effect.result);
+    if (started._tag === "Failure") {
+      yield* use(current === COPPER_COMMIT ? undefined : current);
+      return yield* failure(
+        "command_failed",
+        `The newer Copper did not start, so Kitty kept the one it had.\n${started.failure.message}`,
+      );
+    }
+    return report(asked.latest, { behind: 0, notes: [] });
   });
 
   /** The designer's buttons, each carried out by Copper and logged as the user's doing. */
@@ -2237,6 +2361,7 @@ atexit.register(_kitty_leave)
     boardAutoroute,
     designEngine,
     designAction,
+    engineUpdate,
     layoutReview,
     boardSync,
     boardEdit,

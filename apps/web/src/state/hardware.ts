@@ -257,6 +257,18 @@ export const hardwareDesignAction = createEnvironmentRpcCommand(connectionAtomRu
   label: "environment-data:hardware:design-action",
   tag: WS_METHODS.hardwareDesignAction,
 });
+/** Whether a newer Copper is out; asked once an hour at most. */
+export const hardwareEngineNews = createEnvironmentRpcQueryAtomFamily(connectionAtomRuntime, {
+  label: "environment-data:hardware:engine-news",
+  tag: WS_METHODS.hardwareEngineUpdate,
+  staleTimeMs: 60 * 60_000,
+  idleTtlMs: 60 * 60_000,
+});
+/** Moves to the newest Copper, or back to the one Kitty was tested with. */
+export const hardwareEngineUpdate = createEnvironmentRpcCommand(connectionAtomRuntime, {
+  label: "environment-data:hardware:engine-update",
+  tag: WS_METHODS.hardwareEngineUpdate,
+});
 /** Tells the server what the designer shows, for the agent's next message. */
 export const hardwareDesignView = createEnvironmentRpcCommand(connectionAtomRuntime, {
   label: "environment-data:hardware:design-view",

@@ -54,6 +54,7 @@ import { designerView, useDesignerViewReport } from "./designerView.ts";
 import { currentStep, type DesignStep, designSteps } from "./designSteps.ts";
 import { PartSearch } from "./PartSearch";
 import { ActivityLog } from "./ActivityLog";
+import { EngineUpdate } from "./EngineUpdate";
 import { ProblemList } from "./ProblemList";
 import { boardProblems, countProblems, fixRequest, sheetProblems } from "./problems.ts";
 import {
@@ -1406,6 +1407,11 @@ function DesignerView(props: {
       <div className="flex shrink-0 items-center gap-3 border-t px-2 py-1 text-xs text-muted-foreground">
         <span className="truncate font-mono">{current?.file}</span>
         <ActivityLog changes={source?.changes ?? []} />
+        <EngineUpdate
+          environmentId={environmentId}
+          threadId={threadId}
+          projectId={props.projectId}
+        />
         {scene ? (
           <span className="shrink-0">
             {scene.items.filter(isPart).length} parts

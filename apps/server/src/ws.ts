@@ -3477,6 +3477,10 @@ export const layerWsRpc = (
               rememberDesignerView(input.threadId, input.view, DateTime.toEpochMillis(now)),
             ),
           ),
+        [WS_METHODS.hardwareEngineUpdate]: (input) =>
+          requireHardwareWorkspace(input).pipe(
+            Effect.flatMap(() => kicadService.engineUpdate(input.action)),
+          ),
         [WS_METHODS.hardwareBoardEdit]: (input) =>
           requireHardwareWorkspace(input).pipe(
             Effect.flatMap((workspaceRoot) =>
