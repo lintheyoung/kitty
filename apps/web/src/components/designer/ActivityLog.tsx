@@ -5,6 +5,12 @@ import { useState } from "react";
 import { cn } from "~/lib/utils";
 
 const WHO = { user: "You", agent: "Kitty" } as const;
+/** A file changed on disk has no known author: KiCad, a script, or the agent's shell. */
+const OUTSIDE = "Outside Kitty, ";
+const who = (change: SchematicChange) =>
+  change.summary[0]?.startsWith(OUTSIDE) ? "File" : WHO[change.by];
+const said = (line: string) =>
+  line.startsWith(OUTSIDE) ? `Changed outside Kitty, ${line.slice(OUTSIDE.length)}` : line;
 
 const clock = (at: string) => {
   const time = new Date(at);
@@ -36,9 +42,9 @@ export function ActivityLog(props: { readonly changes: ReadonlyArray<SchematicCh
             newest.by === "agent" ? "text-foreground" : "text-success",
           )}
         >
-          {WHO[newest.by]}
+          {who(newest)}
         </span>
-        <span className="truncate">{newest.summary[0]}</span>
+        <span className="truncate">{said(newest.summary[0] ?? "")}</span>
       </button>
       {open ? (
         <div className="absolute bottom-full left-0 z-10 mb-1 flex max-h-80 w-[28rem] flex-col rounded-md border bg-background text-xs shadow-md">
@@ -61,10 +67,10 @@ export function ActivityLog(props: { readonly changes: ReadonlyArray<SchematicCh
                     change.by === "agent" ? "text-foreground" : "text-success",
                   )}
                 >
-                  {WHO[change.by]}
+                  {who(change)}
                 </span>
                 <span className="min-w-0 break-words text-muted-foreground">
-                  {change.summary.join("; ")}
+                  {change.summary.map(said).join("; ")}
                 </span>
               </li>
             ))}
