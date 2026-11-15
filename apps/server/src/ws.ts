@@ -3314,7 +3314,26 @@ export const layerWsRpc = (
         [WS_METHODS.hardwareErc]: (input) =>
           requireHardwareWorkspace(input).pipe(
             Effect.flatMap((workspaceRoot) =>
-              kicadService.erc({ path: input.path, workspaceRoot }),
+              kicadService.erc({ path: input.path, workspaceRoot }).pipe(
+                // Kitty's own checks ride along as warnings.
+                Effect.flatMap((erc) =>
+                  kicadService.schematicAudit(workspaceRoot, input.path).pipe(
+                    Effect.map((points) => ({
+                      ...erc,
+                      violations: [
+                        ...erc.violations,
+                        ...points.map((point) => ({
+                          type: point.type,
+                          severity: "warning" as const,
+                          description: point.description,
+                          items: [],
+                          fix: point.fix,
+                        })),
+                      ],
+                    })),
+                  ),
+                ),
+              ),
             ),
           ),
         [WS_METHODS.hardwareDrc]: (input) =>

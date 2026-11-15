@@ -67,6 +67,7 @@ import * as SchemaIssue from "effect/SchemaIssue";
 import * as ProcessRunner from "../processRunner.ts";
 import { buildBoardScene } from "@t3tools/shared/kicad/boardScene";
 import { type AuditPoint, auditBoard } from "./boardAudit.ts";
+import { auditSchematic, type SchematicAuditPoint } from "./schematicAudit.ts";
 import { finishingEdits } from "@t3tools/shared/kicad/boardFinish";
 import {
   boardModelFits,
@@ -243,6 +244,11 @@ export class KicadService extends Context.Service<
       readonly path: string;
       readonly action: "tidy" | "sync" | "pour" | "order";
     }) => Effect.Effect<{ readonly summary: ReadonlyArray<string> }, HardwareToolError>;
+    /** Kitty's own checks of a schematic: decoupling, crystal loads. */
+    readonly schematicAudit: (
+      workspaceRoot: string,
+      path: string,
+    ) => Effect.Effect<ReadonlyArray<SchematicAuditPoint>>;
     /** Copper's version: whether a newer one is out, and moving to it or back. */
     readonly engineUpdate: (
       action: "check" | "update" | "reset",
@@ -526,6 +532,13 @@ export const make = Effect.fn("KicadService.make")(function* () {
     return { ...design, netlist };
   });
 
+  /** Kitty's own checks of the schematic; none when its netlist cannot be read. */
+  const schematicAudit = (workspaceRoot: string, requested: string) =>
+    readNetlist(workspaceRoot, requested).pipe(
+      Effect.map(({ netlist }) => auditSchematic(netlist)),
+      Effect.orElseSucceed((): ReadonlyArray<SchematicAuditPoint> => []),
+    );
+
   const boardUntouched = (output: string) =>
     `KiCad could not change the board, so it was left as it was.\n${logTail(output, 8)}`;
 
@@ -775,6 +788,7 @@ atexit.register(_kitty_leave)
   });
 
   /** Runs one Copper tool on a design; what it changes goes into the undo history and the log. */
+  const AUDITED_TOOLS = new Set(["sch_apply", "verify", "design_review", "board_build"]);
   const designEngine = Effect.fn("KicadService.designEngine")(function* (input: {
     readonly workspaceRoot: string;
     readonly path: string;
@@ -881,13 +895,17 @@ atexit.register(_kitty_leave)
         path.relative(input.workspaceRoot, path.join(directory, picture)),
       ),
       state: describeDesignState(text(0), board, unrouted),
-      audit:
-        board === undefined
+      audit: [
+        // The netlist costs a KiCad run, so the schematic is audited where it is judged.
+        ...(AUDITED_TOOLS.has(input.tool) && !creating
+          ? yield* schematicAudit(input.workspaceRoot, input.path)
+          : []),
+        ...(board === undefined
           ? []
           : yield* parseOrFail(() => auditBoard(buildBoardScene(board)), "board").pipe(
-              Effect.map((points) => points.map((point) => `${point.description}. ${point.fix}`)),
-              Effect.orElseSucceed((): ReadonlyArray<string> => []),
-            ),
+              Effect.orElseSucceed((): ReadonlyArray<AuditPoint> => []),
+            )),
+      ].map((point) => `${point.description}. ${point.fix}`),
       userChanges: [...userChanges],
     };
   });
@@ -2394,6 +2412,7 @@ atexit.register(_kitty_leave)
     boardAutoroute,
     designEngine,
     designAction,
+    schematicAudit,
     engineUpdate,
     layoutReview,
     boardSync,
