@@ -933,6 +933,13 @@ function DesignerView(props: {
       if (checked && action !== "order") void runChecks();
     } else {
       setSync({ busy: false, note: formatEnvironmentQueryError(result.cause), failed: true });
+      // An order held back by errors opens the list of them.
+      if (action === "order") {
+        void runChecks();
+        setShowProblems(true);
+        setShowLayers(false);
+        setShowParts(false);
+      }
     }
   };
   const syncBoard = () => runAction("sync", "Bringing the schematic onto the board…");
@@ -1429,6 +1436,9 @@ function DesignerView(props: {
           <span className="flex shrink-0 items-center gap-1.5 text-foreground">
             <span className="size-1.5 animate-pulse rounded-full bg-primary" />
             Kitty: {followed.working}…
+            {followed.why ? (
+              <span className="max-w-96 truncate text-muted-foreground">{followed.why}</span>
+            ) : null}
           </span>
         ) : null}
         {sync.note ? (

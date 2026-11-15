@@ -581,6 +581,12 @@ export const DesignEngineInput = Schema.Struct({
         "That tool's arguments, as `copper_help` gives them. Leave `project` out: `path` says which design.",
     }),
   ),
+  why: Schema.optional(
+    Schema.String.annotate({
+      description:
+        "For a call that changes the design: one short line on what you are about to do and why. The user reads it while the tool runs and in the design's history.",
+    }),
+  ),
 });
 export type DesignEngineInput = typeof DesignEngineInput.Type;
 

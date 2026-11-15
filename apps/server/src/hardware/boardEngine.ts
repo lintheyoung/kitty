@@ -60,6 +60,50 @@ export function parseEngineNews(text: string): EngineNews | undefined {
     return undefined;
   }
 }
+interface Finding {
+  readonly severity: string;
+  readonly description: string;
+  readonly items: ReadonlyArray<{ readonly description: string }>;
+}
+interface CheckCounts {
+  readonly summary: { readonly errors: number };
+  readonly violations: ReadonlyArray<Finding>;
+}
+const FINDINGS_SHOWN = 6;
+
+/**
+ * Why the order files may not be made yet: the errors KiCad's own checks still count.
+ * None when the schematic and the board are clean; warnings do not hold an order back.
+ */
+export function orderRefusal(
+  erc: CheckCounts,
+  drc: CheckCounts & { readonly unconnected: ReadonlyArray<Finding> },
+): string | undefined {
+  const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? "" : "s"}`;
+  // KiCad counts each unrouted connection among the board's errors; here it is named apart.
+  const boardErrors = Math.max(0, drc.summary.errors - drc.unconnected.length);
+  const counts = [
+    erc.summary.errors > 0 ? plural(erc.summary.errors, "schematic error") : undefined,
+    boardErrors > 0 ? plural(boardErrors, "board error") : undefined,
+    drc.unconnected.length > 0 ? plural(drc.unconnected.length, "unrouted connection") : undefined,
+  ].filter((count) => count !== undefined);
+  if (counts.length === 0) return undefined;
+  const findings = [
+    ...[...erc.violations, ...drc.violations].filter((violation) => violation.severity === "error"),
+    ...drc.unconnected,
+  ]
+    .slice(0, FINDINGS_SHOWN)
+    .map((violation) => {
+      const about = violation.items[0]?.description;
+      return `- ${violation.description}${about ? `: ${about}` : ""}`;
+    });
+  return [
+    `The order files were not made: ${counts.join(", ")}. A board ordered like this would likely not work.`,
+    ...findings,
+    "Fix each one at its cause and check again; then the order files can be made.",
+  ].join("\n");
+}
+
 /** Under the user's home: the engine's source, its Python, and its own cache and settings. */
 export const COPPER_FOLDER = ".kitty/tools/copper";
 export const COPPER_HOME_FOLDER = ".kitty/copper";

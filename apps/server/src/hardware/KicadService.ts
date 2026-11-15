@@ -96,6 +96,7 @@ import {
   copperArchiveUrl,
   copperCompareUrl,
   engineChoiceText,
+  orderRefusal,
   type EngineNews,
   parseEngineNews,
   COPPER_FOLDER,
@@ -233,6 +234,7 @@ export class KicadService extends Context.Service<
       readonly tool: string;
       readonly arguments: Readonly<Record<string, unknown>>;
       readonly by?: SchematicChangeAuthor;
+      readonly why?: string | undefined;
     }) => Effect.Effect<DesignEngineResult, HardwareToolError>;
     /** One of the designer's buttons (tidy, sync, pour, order), done by Copper. */
     readonly designAction: (input: {
@@ -778,7 +780,13 @@ atexit.register(_kitty_leave)
     readonly tool: string;
     readonly arguments: Readonly<Record<string, unknown>>;
     readonly by?: SchematicChangeAuthor;
+    readonly why?: string | undefined;
   }) {
+    // The order files are made only from a design KiCad's own checks call clean.
+    if (input.tool === "fab_export") {
+      const refusal = orderRefusal(yield* erc(input), yield* drc(input));
+      if (refusal) return yield* failure("invalid_argument", refusal);
+    }
     const engine = yield* findEngine();
     const home = yield* HostProcess.HomeDirectory;
     // The design is named by `path` alone, so the engine cannot be pointed outside the workspace.
@@ -848,7 +856,13 @@ atexit.register(_kitty_leave)
       history.current = now;
       changed = true;
     }
-    if (changed) yield* recordChange(directory, input.by ?? "agent", [reply.summary]);
+    const why = input.why?.trim();
+    if (changed) {
+      yield* recordChange(directory, input.by ?? "agent", [
+        reply.summary,
+        ...(why ? [`Why: ${why.slice(0, 240)}`] : []),
+      ]);
+    }
     const text = (index: number) => Option.getOrUndefined(after[index] ?? Option.none<string>());
     const board = text(1);
     const unrouted =

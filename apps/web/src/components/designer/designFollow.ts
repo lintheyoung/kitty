@@ -44,13 +44,20 @@ const bareName = (toolName: string | null | undefined) => toolName?.split(/__|[.
 export function designWorkOfTool(
   toolName: string | null | undefined,
   input: unknown,
-): { readonly page: DesignPage; readonly working: string } | undefined {
+): { readonly page: DesignPage; readonly working: string; readonly why?: string } | undefined {
   if (bareName(toolName) !== "copper" || typeof input !== "object" || input === null) {
     return undefined;
   }
   const tool = (input as { readonly tool?: unknown }).tool;
   const work = typeof tool === "string" ? COPPER_WORK[tool] : undefined;
-  return work ? { page: work[0], working: work[1] } : undefined;
+  const why = (input as { readonly why?: unknown }).why;
+  return work
+    ? {
+        page: work[0],
+        working: work[1],
+        ...(typeof why === "string" && why.trim() !== "" ? { why: why.trim() } : {}),
+      }
+    : undefined;
 }
 
 /** How long after a design tool ran it still pulls the designer to its page. */
@@ -61,6 +68,8 @@ export interface DesignCall {
   readonly page: DesignPage;
   /** What the agent is doing, shown while the call runs. */
   readonly working: string;
+  /** The agent's own reason for the call, when it gave one. */
+  readonly why?: string;
   readonly live: boolean;
 }
 

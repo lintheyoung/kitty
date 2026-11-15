@@ -4,6 +4,7 @@ import {
   chosenEngineCommit,
   engineChoiceText,
   enginePictures,
+  orderRefusal,
   parseEngineNews,
   parseEngineReply,
   parseLayoutReview,
@@ -104,5 +105,47 @@ describe("chosenEngineCommit", () => {
     expect(chosenEngineCommit('{"commit":"main; rm -rf"}')).toBeUndefined();
     expect(chosenEngineCommit("not json")).toBeUndefined();
     expect(chosenEngineCommit(undefined)).toBeUndefined();
+  });
+});
+
+describe("orderRefusal", () => {
+  const clean = { summary: { errors: 0 }, violations: [], unconnected: [] };
+
+  it("lets a clean design through, warnings and all", () => {
+    const warned = {
+      ...clean,
+      violations: [{ severity: "warning", description: "Silkscreen clipped", items: [] }],
+    };
+    expect(orderRefusal(clean, warned)).toBeUndefined();
+  });
+
+  it("holds the order back and names what is wrong", () => {
+    const refusal = orderRefusal(
+      {
+        summary: { errors: 1 },
+        violations: [
+          {
+            severity: "error",
+            description: "Pin not connected",
+            items: [{ description: "U1 pin 4" }],
+          },
+        ],
+      },
+      {
+        summary: { errors: 2 },
+        violations: [],
+        unconnected: [
+          {
+            severity: "error",
+            description: "Missing connection",
+            items: [{ description: "Pad 1 of R5" }],
+          },
+          { severity: "error", description: "Missing connection", items: [] },
+        ],
+      },
+    );
+    expect(refusal).toContain("- Missing connection: Pad 1 of R5");
+    expect(refusal).toContain("1 schematic error, 2 unrouted connections");
+    expect(refusal).toContain("- Pin not connected: U1 pin 4");
   });
 });

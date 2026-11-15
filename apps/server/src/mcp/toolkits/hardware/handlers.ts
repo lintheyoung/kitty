@@ -113,6 +113,7 @@ export const layer = McpToolAccess.toLayer(HardwareToolkit, {
         path: input.path,
         tool: input.tool,
         arguments: input.arguments ?? {},
+        why: input.why,
         workspaceRoot: yield* callerWorkspaceRoot(),
       });
     }),
