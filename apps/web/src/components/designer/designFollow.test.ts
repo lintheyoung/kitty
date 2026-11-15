@@ -1,41 +1,51 @@
 import { describe, expect, it } from "vite-plus/test";
 import * as DateTime from "effect/DateTime";
 
-import { designPageOfTool, freshDesignCall } from "./designFollow.ts";
+import { designWorkOfTool, freshDesignCall } from "./designFollow.ts";
 
 const NOW = Date.parse("2026-11-12T10:00:00Z");
-const tool = (id: string, toolName: string, status: string, secondsAgo: number) =>
+const tool = (id: string, copperTool: string, status: string, secondsAgo: number) =>
   ({
     item: {
       type: "dynamic_tool",
       id,
-      toolName,
+      toolName: copperTool === "hw_build" ? "mcp__t3-code__hw_build" : "mcp__t3-code__copper",
+      input: { path: "hardware/kicad", tool: copperTool },
       status,
       updatedAt: DateTime.makeUnsafe(NOW - secondsAgo * 1000),
     },
   }) as unknown as Parameters<typeof freshDesignCall>[0][number];
 
-describe("designPageOfTool", () => {
-  it("knows the page of a design tool whatever the provider's prefix", () => {
-    expect(designPageOfTool("sch_edit")).toBe("schematic");
-    expect(designPageOfTool("mcp__t3-code__pcb_edit")).toBe("board");
-    expect(designPageOfTool("t3-code.pcb_autoroute")).toBe("board");
-    expect(designPageOfTool("hw_build")).toBeUndefined();
-    expect(designPageOfTool(null)).toBeUndefined();
+describe("designWorkOfTool", () => {
+  it("reads the Copper tool from the call, whatever the provider's prefix", () => {
+    expect(designWorkOfTool("copper", { tool: "sch_apply" })).toEqual({
+      page: "schematic",
+      working: "Drawing the schematic",
+    });
+    expect(designWorkOfTool("t3-code.copper", { tool: "pcb_route" })?.page).toBe("board");
+    expect(designWorkOfTool("mcp__t3-code__copper", { tool: "copper_help" })).toBeUndefined();
+    expect(designWorkOfTool("hw_build", { tool: "pcb_route" })).toBeUndefined();
+    expect(designWorkOfTool(null, undefined)).toBeUndefined();
   });
 });
 
 describe("freshDesignCall", () => {
   it("follows the newest design call while it runs or has just finished", () => {
     const items = [
-      tool("a", "mcp__t3-code__sch_edit", "completed", 300),
-      tool("b", "mcp__t3-code__pcb_edit", "running", 90),
-      tool("c", "mcp__t3-code__hw_build", "running", 1),
+      tool("a", "sch_apply", "completed", 300),
+      tool("b", "pcb_route", "running", 90),
+      tool("c", "hw_build", "running", 1),
     ];
-    expect(freshDesignCall(items, NOW)).toEqual({ id: "b", page: "board" });
-    expect(freshDesignCall([tool("a", "sch_edit", "completed", 5)], NOW)).toEqual({
+    expect(freshDesignCall(items, NOW)).toEqual({
+      id: "b",
+      page: "board",
+      working: "Routing the board",
+      live: true,
+    });
+    expect(freshDesignCall([tool("a", "sch_tidy", "completed", 5)], NOW)).toMatchObject({
       id: "a",
       page: "schematic",
+      live: false,
     });
   });
 

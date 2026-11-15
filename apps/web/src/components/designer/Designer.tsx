@@ -1419,6 +1419,12 @@ function DesignerView(props: {
           <span className="truncate text-destructive-foreground">{checks.error}</span>
         ) : null}
         {editor.busy ? <span className="shrink-0">Saving…</span> : null}
+        {followed?.live ? (
+          <span className="flex shrink-0 items-center gap-1.5 text-foreground">
+            <span className="size-1.5 animate-pulse rounded-full bg-primary" />
+            Kitty: {followed.working}…
+          </span>
+        ) : null}
         {sync.note ? (
           <span className={cn("truncate", sync.failed && "text-destructive-foreground")}>
             {sync.note}

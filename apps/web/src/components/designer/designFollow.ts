@@ -10,23 +10,47 @@ import { useRightPanelStore } from "../../rightPanelStore";
 
 export type DesignPage = "schematic" | "board";
 
-const PAGE_OF_TOOL: Readonly<Record<string, DesignPage>> = {
-  sch_edit: "schematic",
-  sch_tidy: "schematic",
-  kicad_erc: "schematic",
-  pcb_sync: "board",
-  pcb_edit: "board",
-  pcb_autoroute: "board",
-  pcb_pour: "board",
-  pcb_silkscreen: "board",
-  kicad_drc: "board",
-  kicad_fab_export: "board",
+/** What each Copper tool does, as the designer says it while the agent runs it. */
+const COPPER_WORK: Readonly<Record<string, readonly [DesignPage, string]>> = {
+  sch_apply: ["schematic", "Drawing the schematic"],
+  sch_tidy: ["schematic", "Tidying the schematic"],
+  sch_read: ["schematic", "Reading the schematic"],
+  parts_search: ["schematic", "Looking for parts"],
+  parts_get: ["schematic", "Looking up a part"],
+  parts_import: ["schematic", "Adding a part to the library"],
+  parts_source_bom: ["schematic", "Finding a part for each line of the BOM"],
+  parts_alternatives: ["schematic", "Looking for other parts that fit"],
+  design_review: ["schematic", "Reviewing the design"],
+  board_build: ["board", "Building the board: placing, routing, checking"],
+  pcb_sync: ["board", "Bringing the schematic onto the board"],
+  pcb_setup: ["board", "Setting up the board"],
+  pcb_place: ["board", "Placing parts"],
+  pcb_route_plan: ["board", "Planning the routing"],
+  pcb_route_guided: ["board", "Routing to a plan"],
+  pcb_route: ["board", "Routing the board"],
+  pcb_pour: ["board", "Pouring copper"],
+  pcb_edit: ["board", "Editing the board"],
+  pcb_read: ["board", "Reading the board"],
+  verify: ["board", "Checking the design"],
+  render: ["board", "Taking a picture of the design"],
+  fab_export: ["board", "Making the order files"],
+  export: ["board", "Exporting files"],
 };
 
-/** The page a tool works on; providers prefix tool names, e.g. mcp__t3-code__pcb_edit. */
-export function designPageOfTool(toolName: string | null | undefined): DesignPage | undefined {
-  const name = toolName?.split(/__|[./:]/).at(-1);
-  return name ? PAGE_OF_TOOL[name] : undefined;
+/** The last part of a tool's name; providers prefix it, e.g. mcp__t3-code__copper. */
+const bareName = (toolName: string | null | undefined) => toolName?.split(/__|[./:]/).at(-1);
+
+/** The page a design tool call works on and what it is doing; none for other tools. */
+export function designWorkOfTool(
+  toolName: string | null | undefined,
+  input: unknown,
+): { readonly page: DesignPage; readonly working: string } | undefined {
+  if (bareName(toolName) !== "copper" || typeof input !== "object" || input === null) {
+    return undefined;
+  }
+  const tool = (input as { readonly tool?: unknown }).tool;
+  const work = typeof tool === "string" ? COPPER_WORK[tool] : undefined;
+  return work ? { page: work[0], working: work[1] } : undefined;
 }
 
 /** How long after a design tool ran it still pulls the designer to its page. */
@@ -35,6 +59,9 @@ const FRESH_MS = 20_000;
 export interface DesignCall {
   readonly id: string;
   readonly page: DesignPage;
+  /** What the agent is doing, shown while the call runs. */
+  readonly working: string;
+  readonly live: boolean;
 }
 
 /** The agent's newest design tool call, if it is running or has only just finished. */
@@ -45,11 +72,11 @@ export function freshDesignCall(
   for (let index = items.length - 1; index >= 0; index--) {
     const item = items[index]?.item;
     if (item?.type !== "dynamic_tool") continue;
-    const page = designPageOfTool(item.toolName);
-    if (!page) continue;
+    const work = designWorkOfTool(item.toolName, item.input);
+    if (!work) continue;
     const live = item.status === "pending" || item.status === "running";
     const fresh = now - DateTime.toEpochMillis(item.updatedAt) < FRESH_MS;
-    return live || fresh ? { id: item.id, page } : undefined;
+    return live || fresh ? { id: item.id, ...work, live } : undefined;
   }
   return undefined;
 }
@@ -73,9 +100,24 @@ export function useDesignFollow(
   useEffect(() => {
     if (!environmentId || !threadId) return;
     const call = freshDesignCall(items, Date.now());
-    if (!call || followed.current === call.id) return;
-    followed.current = call.id;
-    useRightPanelStore.getState().open({ environmentId, threadId }, "designer");
-    useDesignFocusStore.setState({ focus: { threadId, call } });
+    const shown = useDesignFocusStore.getState().focus;
+    if (!call) {
+      // A call that has ended stops showing as running.
+      if (shown?.threadId === threadId && shown.call.live) {
+        useDesignFocusStore.setState({ focus: { threadId, call: { ...shown.call, live: false } } });
+      }
+      return;
+    }
+    if (followed.current !== call.id) {
+      followed.current = call.id;
+      useRightPanelStore.getState().open({ environmentId, threadId }, "designer");
+    }
+    if (
+      shown?.threadId !== threadId ||
+      shown.call.id !== call.id ||
+      shown.call.live !== call.live
+    ) {
+      useDesignFocusStore.setState({ focus: { threadId, call } });
+    }
   }, [environmentId, threadId, items]);
 }
