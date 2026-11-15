@@ -602,6 +602,8 @@ export const DesignEngineResult = Schema.Struct({
   images: Schema.Array(Schema.String),
   /** Where the design stands now: parts drawn, placed, tracks, what is unrouted. */
   state: Schema.String,
+  /** Kitty's own findings on the board (antenna keep-out and the like), each with its fix. */
+  audit: Schema.Array(Schema.String),
   /**
    * What the user changed by hand since your last change, in the designer or in KiCad.
    * Respect it: do not undo it without asking.

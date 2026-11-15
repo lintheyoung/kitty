@@ -230,6 +230,9 @@ export interface LayoutReview {
     readonly type: string;
     readonly description: string;
     readonly fix?: string;
+    /** Where to look on the board, in millimetres, when the point has a place. */
+    readonly x?: number;
+    readonly y?: number;
   }>;
 }
 

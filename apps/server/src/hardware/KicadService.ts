@@ -66,6 +66,7 @@ import * as SchemaIssue from "effect/SchemaIssue";
 
 import * as ProcessRunner from "../processRunner.ts";
 import { buildBoardScene } from "@t3tools/shared/kicad/boardScene";
+import { type AuditPoint, auditBoard } from "./boardAudit.ts";
 import { finishingEdits } from "@t3tools/shared/kicad/boardFinish";
 import {
   boardModelFits,
@@ -880,6 +881,13 @@ atexit.register(_kitty_leave)
         path.relative(input.workspaceRoot, path.join(directory, picture)),
       ),
       state: describeDesignState(text(0), board, unrouted),
+      audit:
+        board === undefined
+          ? []
+          : yield* parseOrFail(() => auditBoard(buildBoardScene(board)), "board").pipe(
+              Effect.map((points) => points.map((point) => `${point.description}. ${point.fix}`)),
+              Effect.orElseSucceed((): ReadonlyArray<string> => []),
+            ),
       userChanges: [...userChanges],
     };
   });
@@ -1023,12 +1031,23 @@ atexit.register(_kitty_leave)
     readonly workspaceRoot: string;
     readonly path: string;
   }) {
-    const reply = yield* designEngine({
+    // Kitty's own checks stand whether or not Copper's review answers.
+    const { file } = yield* resolveDesign(input.workspaceRoot, input.path, ".kicad_pcb");
+    const board = yield* fs
+      .readFileString(file)
+      .pipe(Effect.mapError((cause) => failure("command_failed", cause.message)));
+    const audit = yield* parseOrFail(() => auditBoard(buildBoardScene(board)), "board").pipe(
+      Effect.orElseSucceed((): ReadonlyArray<AuditPoint> => []),
+    );
+    const review = yield* designEngine({
       ...input,
       tool: "pcb_read",
       arguments: { what: ["elegance"] },
-    });
-    return parseLayoutReview(reply.report);
+    }).pipe(
+      Effect.map((reply) => parseLayoutReview(reply.report)),
+      Effect.orElseSucceed((): LayoutReview => ({ points: [] })),
+    );
+    return { ...review, points: [...audit, ...review.points] };
   });
 
   /** Routes what is unrouted with Copper, then pours ground and checks the board. */

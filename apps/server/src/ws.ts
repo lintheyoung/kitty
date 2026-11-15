@@ -3332,7 +3332,10 @@ export const layerWsRpc = (
                           type: point.type,
                           severity: "warning" as const,
                           description: point.description,
-                          items: [],
+                          items:
+                            point.x === undefined || point.y === undefined
+                              ? []
+                              : [{ description: "", x: point.x, y: point.y }],
                           ...(point.fix ? { fix: point.fix } : {}),
                         })),
                       ],
