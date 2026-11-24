@@ -68,6 +68,7 @@ import * as ProcessRunner from "../processRunner.ts";
 import { buildBoardScene } from "@t3tools/shared/kicad/boardScene";
 import { type AuditPoint, auditBoard } from "./boardAudit.ts";
 import { auditSchematic, type SchematicAuditPoint } from "./schematicAudit.ts";
+import { kittyFabProfile } from "./fabFacts.ts";
 import { finishingEdits } from "@t3tools/shared/kicad/boardFinish";
 import {
   boardModelFits,
@@ -681,6 +682,20 @@ atexit.register(_kitty_leave)
     const text = yield* fs.readFileString(yield* engineChoice()).pipe(Effect.option);
     return chosenEngineCommit(Option.getOrUndefined(text)) ?? COPPER_COMMIT;
   });
+  /** Copper's JLCPCB profile with the limits Kitty checked; a failure leaves Copper's own. */
+  const adoptFabFacts = Effect.fn("KicadService.adoptFabFacts")(
+    function* (home: string, source: string) {
+      const builtIn = path.join(source, "copper_kicad", "data", "fabs", "jlcpcb.json");
+      const target = path.join(home, COPPER_HOME_FOLDER, "fabs", "jlcpcb.json");
+      const text = kittyFabProfile(yield* fs.readFileString(builtIn));
+      if (!text) return;
+      const current = yield* fs.readFileString(target).pipe(Effect.option);
+      if (Option.getOrUndefined(current) === text) return;
+      yield* fs.makeDirectory(path.dirname(target), { recursive: true });
+      yield* fs.writeFileString(target, text);
+    },
+    (effect) => Effect.ignore(effect),
+  );
   const findEngine = Effect.fn("KicadService.findEngine")(function* () {
     if (knownEngine) return knownEngine;
     const home = yield* HostProcess.HomeDirectory;
@@ -733,6 +748,7 @@ atexit.register(_kitty_leave)
       );
       yield* fs.remove(archive).pipe(Effect.ignore);
     }
+    yield* adoptFabFacts(home, source);
     const own = path.join(root, "venv", "bin", "python3");
     for (const python of [own, ...ENGINE_PYTHONS]) {
       if (yield* works(python, ENGINE_PYTHON_CHECK)) {
